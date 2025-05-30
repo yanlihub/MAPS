@@ -25,6 +25,12 @@ class FidelityClassifier:
     2. Autoencoder training for feature extraction
     3. Classifier training for density ratio estimation
     4. Importance weight estimation
+    
+    The class stores the original real data from training to ensure consistent
+    preprocessing when estimating importance weights for new synthetic data.
+    
+    Note: To avoid data leakage, users should provide separate synthetic datasets
+    for classifier training and importance weight estimation.
     """
     
     def __init__(self,
@@ -60,16 +66,17 @@ class FidelityClassifier:
         )
         
         # Store processed data and embeddings
+        self.original_real_data = None  # Store original real data for consistent preprocessing
         self.processed_real_df = None
-        self.processed_synthetic_df = None
+        self.processed_synthetic_training_df = None
         self.real_embeddings = None
-        self.synthetic_embeddings = None
+        self.synthetic_training_embeddings = None
         
         self.is_fitted = False
         
     def fit(self,
             real_data: pd.DataFrame,
-            synthetic_data: pd.DataFrame,
+            synthetic_data_for_training: pd.DataFrame,
             # Autoencoder parameters
             autoencoder_epochs: int = 400,
             autoencoder_batch_size: int = 256,
@@ -86,7 +93,7 @@ class FidelityClassifier:
         
         Args:
             real_data: Real data DataFrame
-            synthetic_data: Synthetic data DataFrame
+            synthetic_data_for_training: Synthetic data subset specifically for classifier training
             autoencoder_epochs: Number of autoencoder training epochs
             autoencoder_batch_size: Batch size for autoencoder training
             autoencoder_lr: Learning rate for autoencoder
@@ -99,11 +106,22 @@ class FidelityClassifier:
             
         Returns:
             Tuple of (classifier_accuracy, classifier_roc_auc)
+            
+        Note:
+            Users should provide a separate synthetic dataset for importance weight estimation
+            using estimate_importance_weights() to avoid data leakage.
         """
         if self.verbose:
             print("=" * 60)
             print("STARTING C-MAPS FIDELITY CLASSIFIER TRAINING")
             print("=" * 60)
+            print(f"Real data for training: {real_data.shape}")
+            print(f"Synthetic data for training: {synthetic_data_for_training.shape}")
+        
+        # Store original real data for consistent preprocessing of new synthetic data
+        # This ensures the same preprocessing pipeline and feature distributions
+        # when estimating importance weights for evaluation synthetic data
+        self.original_real_data = real_data.copy()
         
         # Step 1: Preprocess data for autoencoder
         if self.verbose:
@@ -111,10 +129,10 @@ class FidelityClassifier:
             print("-" * 40)
         
         (self.processed_real_df, 
-         self.processed_synthetic_df, 
+         self.processed_synthetic_training_df, 
          encoders, 
          numerical_cols, 
-         encoded_cols) = self.preprocessor.fit_transform(real_data, synthetic_data)
+         encoded_cols) = self.preprocessor.fit_transform(real_data, synthetic_data_for_training)
         
         # Step 2: Train autoencoder and get embeddings
         if self.verbose:
@@ -135,9 +153,9 @@ class FidelityClassifier:
         # Adjust batch size based on data size
         adjusted_batch_size = min(autoencoder_batch_size, len(self.processed_real_df))
         
-        self.real_embeddings, self.synthetic_embeddings = self.autoencoder_trainer.train(
+        self.real_embeddings, self.synthetic_training_embeddings = self.autoencoder_trainer.train(
             real_data=self.processed_real_df,
-            synthetic_data=self.processed_synthetic_df if use_synthetic_for_autoencoder else None,
+            synthetic_data=self.processed_synthetic_training_df if use_synthetic_for_autoencoder else None,
             epochs=autoencoder_epochs,
             batch_size=adjusted_batch_size,
             learning_rate=autoencoder_lr,
@@ -147,35 +165,25 @@ class FidelityClassifier:
         
         # If not using synthetic data for training, get synthetic embeddings separately
         if not use_synthetic_for_autoencoder:
-            self.synthetic_embeddings = self.autoencoder_trainer.get_embeddings(self.processed_synthetic_df)
+            self.synthetic_training_embeddings = self.autoencoder_trainer.get_embeddings(self.processed_synthetic_training_df)
         
         if self.verbose:
-            print(f"Generated embeddings - Real: {self.real_embeddings.shape}, Synthetic: {self.synthetic_embeddings.shape}")
+            print(f"Generated embeddings - Real: {self.real_embeddings.shape}, Synthetic training: {self.synthetic_training_embeddings.shape}")
         
         # Step 3: Train classifier for density ratio estimation
         if self.verbose:
             print("\n3. TRAINING CLASSIFIER FOR DENSITY RATIO ESTIMATION")
             print("-" * 40)
-        
-        # Use subset of synthetic data for classifier training to avoid overfitting
-        synthetic_subset_size = min(5 * len(self.real_embeddings), len(self.synthetic_embeddings))
-        if synthetic_subset_size < len(self.synthetic_embeddings):
-            synthetic_indices = np.random.choice(
-                len(self.synthetic_embeddings), 
-                synthetic_subset_size, 
-                replace=False
-            )
-            synthetic_embeddings_for_classifier = self.synthetic_embeddings[synthetic_indices]
-        else:
-            synthetic_embeddings_for_classifier = self.synthetic_embeddings
+            print(f"Using all provided synthetic training data: {self.synthetic_training_embeddings.shape}")
         
         # Adjust MLP hidden layer sizes based on embedding dimension
         adjusted_mlp_sizes = tuple(min(size, adjusted_embedding_dim * 4) 
                                  for size in mlp_hidden_layer_sizes)
         
+        # Use all provided synthetic training data (no automatic subset selection)
         accuracy, roc_auc = self.classifier_trainer.train(
             real_data=self.real_embeddings,
-            synthetic_data=synthetic_embeddings_for_classifier,
+            synthetic_data=self.synthetic_training_embeddings,
             test_size=classifier_test_size,
             mlp_hidden_layer_sizes=adjusted_mlp_sizes,
             show_calibration_plot=show_calibration_plot
@@ -187,35 +195,50 @@ class FidelityClassifier:
             print("\n" + "=" * 60)
             print("FIDELITY CLASSIFIER TRAINING COMPLETE!")
             print("=" * 60)
+            print("Note: Use estimate_importance_weights(synthetic_data) with separate")
+            print("synthetic data to avoid data leakage.")
         
         return accuracy, roc_auc
     
     def estimate_importance_weights(self, 
-                                   synthetic_data: Optional[pd.DataFrame] = None,
+                                   synthetic_data: pd.DataFrame,
                                    epsilon: float = 1e-9) -> Tuple[np.ndarray, np.ndarray]:
         """
         Estimate importance weights for synthetic data.
         
         Args:
-            synthetic_data: Synthetic data to estimate weights for (if None, uses training synthetic data)
+            synthetic_data: Synthetic data to estimate weights for (must be provided)
             epsilon: Small constant for numerical stability
             
         Returns:
             Tuple of (importance_weights, probabilities)
+            
+        Note:
+            This synthetic_data should be different from the synthetic_data_for_training
+            used in fit() to avoid data leakage.
         """
         if not self.is_fitted:
             raise ValueError("FidelityClassifier must be fitted before estimating weights")
         
-        if synthetic_data is not None:
-            # Process new synthetic data
-            processed_synthetic_df, _, _, _, _ = self.preprocessor.fit_transform(
-                self.processed_real_df.iloc[:1],  # Dummy real data for consistent processing
-                synthetic_data
-            )
-            synthetic_embeddings = self.autoencoder_trainer.get_embeddings(processed_synthetic_df)
-        else:
-            # Use training synthetic embeddings
-            synthetic_embeddings = self.synthetic_embeddings
+        if synthetic_data is None:
+            raise ValueError("synthetic_data must be provided to estimate importance weights. "
+                           "Use a different synthetic dataset than the one used for training to avoid data leakage.")
+        
+        if self.verbose:
+            print(f"Estimating importance weights for {len(synthetic_data)} synthetic samples")
+        
+        # Use the original real data from training for consistent preprocessing
+        # This ensures the same preprocessing pipeline and feature distributions
+        _, processed_synthetic_df, _, _, _ = self.preprocessor.fit_transform(
+            self.original_real_data, 
+            synthetic_data
+        )
+        
+        # Get embeddings for the new synthetic data
+        synthetic_embeddings = self.autoencoder_trainer.get_embeddings(processed_synthetic_df)
+        
+        if self.verbose:
+            print(f"Generated embeddings for importance weight estimation: {synthetic_embeddings.shape}")
         
         return self.classifier_trainer.estimate_importance_weights(synthetic_embeddings, epsilon)
     
@@ -249,13 +272,53 @@ class FidelityClassifier:
             print(f"  Median: {np.median(importance_weights):.6f}")
     
     def get_embeddings(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Get the computed embeddings."""
+        """Get the computed embeddings from training."""
         if not self.is_fitted:
             raise ValueError("FidelityClassifier must be fitted first")
-        return self.real_embeddings, self.synthetic_embeddings
+        return self.real_embeddings, self.synthetic_training_embeddings
     
     def get_processed_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Get the processed data."""
+        """Get the processed data from training."""
         if not self.is_fitted:
             raise ValueError("FidelityClassifier must be fitted first")
-        return self.processed_real_df, self.processed_synthetic_df
+        return self.processed_real_df, self.processed_synthetic_training_df
+    
+    def get_original_real_data(self) -> pd.DataFrame:
+        """Get the original real data used for training."""
+        if not self.is_fitted:
+            raise ValueError("FidelityClassifier must be fitted first")
+        return self.original_real_data.copy()
+    
+    def split_synthetic_data(self, 
+                            synthetic_data: pd.DataFrame, 
+                            training_ratio: float = 0.2,
+                            random_seed: Optional[int] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Utility method to split synthetic data into training and evaluation sets.
+        
+        Args:
+            synthetic_data: Full synthetic dataset
+            training_ratio: Ratio of data to use for classifier training
+            random_seed: Random seed for reproducible splits
+            
+        Returns:
+            Tuple of (synthetic_data_for_training, synthetic_data_for_evaluation)
+        """
+        if random_seed is None:
+            random_seed = self.random_seed
+            
+        synthetic_data_for_training = synthetic_data.sample(
+            frac=training_ratio, 
+            random_state=random_seed
+        )
+        synthetic_data_for_evaluation = synthetic_data.drop(
+            synthetic_data_for_training.index
+        ).reset_index(drop=True)
+        synthetic_data_for_training = synthetic_data_for_training.reset_index(drop=True)
+        
+        if self.verbose:
+            print(f"Split synthetic data:")
+            print(f"  Training set: {len(synthetic_data_for_training)} samples ({training_ratio:.1%})")
+            print(f"  Evaluation set: {len(synthetic_data_for_evaluation)} samples ({1-training_ratio:.1%})")
+        
+        return synthetic_data_for_training, synthetic_data_for_evaluation
