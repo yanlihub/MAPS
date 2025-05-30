@@ -71,10 +71,12 @@ class SamplingEngine:
                 print(f"  Min clip value: {min_clip}")
             print(f"  Original weights - Min: {np.min(importance_weights):.6f}, "
                   f"Max: {np.max(importance_weights):.6f}, "
-                  f"Std: {np.std(importance_weights):.6f}")
+                  f"Std: {np.std(importance_weights):.6f}, "
+                  f"Mean: {np.mean(importance_weights):.6f}")
             print(f"  Processed weights - Min: {np.min(processed_weights):.6f}, "
                   f"Max: {np.max(processed_weights):.6f}, "
-                  f"Std: {np.std(processed_weights):.6f}")
+                  f"Std: {np.std(processed_weights):.6f}, "
+                  f"Mean: {np.mean(processed_weights):.6f}")
         
         return processed_weights
         
