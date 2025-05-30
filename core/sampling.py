@@ -81,14 +81,14 @@ class SamplingEngine:
         return processed_weights
         
     def sir_sampler(self,
-                   synthetic_data: Union[pd.DataFrame, np.ndarray],
-                   importance_weights: np.ndarray,
-                   n_samples: int,
-                   method: str = 'weighted',
-                   identifiability_flags: Optional[np.ndarray] = None,
-                   weight_processing: str = 'raw',
-                   alpha: float = 1.0,
-                   min_clip: float = 1e-9) -> Tuple[Union[pd.DataFrame, np.ndarray], np.ndarray, np.ndarray, Dict[str, Any]]:
+                synthetic_data: Union[pd.DataFrame, np.ndarray],
+                importance_weights: np.ndarray,
+                n_samples: int,
+                method: str = 'weighted',
+                identifiability_flags: Optional[np.ndarray] = None,
+                weight_processing: str = 'raw',
+                alpha: float = 1.0,
+                min_clip: float = 1e-9) -> Tuple[Union[pd.DataFrame, np.ndarray], np.ndarray, np.ndarray, Dict[str, Any]]:
         """
         Sampling-Importance-Resampling (SIR) algorithm.
         
@@ -161,28 +161,34 @@ class SamplingEngine:
         
         if self.verbose:
             print(f"SIR sampling complete. Selected {len(resampled_data)} samples.")
-            if method == 'weighted':
-                print(f"Weight statistics - Min: {np.min(resampled_weights):.4f}, "
-                      f"Max: {np.max(resampled_weights):.4f}, "
-                      f"Mean: {np.mean(resampled_weights):.4f}")
+            # Show weight statistics for both methods
+            print(f"Weight statistics - Min: {np.min(resampled_weights):.4f}, "
+                f"Max: {np.max(resampled_weights):.4f}, "
+                f"Mean: {np.mean(resampled_weights):.4f}")
             
             if identifiability_flags is not None:
                 print(f"Identifiable samples: {stats_dict['identifiable_samples']}/{len(resampled_data)} "
-                      f"({stats_dict['identifiable_percentage']:.2%})")
+                    f"({stats_dict['identifiable_percentage']:.2%})")
         
         return resampled_data, resampled_weights, resampled_indices, stats_dict
-    
+
     def sir_ic_sampler(self,
-                      synthetic_data: Union[pd.DataFrame, np.ndarray],
-                      importance_weights: np.ndarray,
-                      identifiability_flags: np.ndarray,
-                      n_samples: int,
-                      epsilon_identifiability: float = 0.05,
-                      weight_processing: str = 'raw',
-                      alpha: float = 1.0,
-                      min_clip: float = 1e-9) -> Tuple[Union[pd.DataFrame, np.ndarray], np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+                    synthetic_data: Union[pd.DataFrame, np.ndarray],
+                    importance_weights: np.ndarray,
+                    identifiability_flags: np.ndarray,
+                    n_samples: int,
+                    epsilon_identifiability: float = 0.05,
+                    weight_processing: str = 'raw',
+                    alpha: float = 1.0,
+                    min_clip: float = 1e-9) -> Tuple[Union[pd.DataFrame, np.ndarray], np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
         """
-        Sampling-Importance-Resampling with Identifiability Constraints (SIR-IC).
+        Improved Sampling-Importance-Resampling with Identifiability Constraints (SIR-IC).
+        
+        This version uses a budget-based approach:
+        1. Calculate maximum identifiable samples allowed
+        2. Sample with replacement based on importance weights from all samples
+        3. Once identifiable budget is exhausted, only sample from non-identifiable samples
+        4. Maintains natural importance sampling properties throughout
         
         Args:
             synthetic_data: Synthetic data samples
@@ -198,7 +204,7 @@ class SamplingEngine:
             Tuple of (selected_data, selected_weights, selected_flags, selected_indices, stats_dict)
         """
         if self.verbose:
-            print(f"Running SIR-IC sampler with epsilon={epsilon_identifiability}")
+            print(f"Running improved SIR-IC sampler with epsilon={epsilon_identifiability}")
             print(f"Target: {n_samples} samples with max {epsilon_identifiability:.1%} identifiable")
         
         np.random.seed(self.random_seed)
@@ -210,7 +216,7 @@ class SamplingEngine:
         KN = len(synthetic_data)
         if KN == 0:
             empty_stats = {
-                'method': 'sir_ic',
+                'method': 'sir_ic_improved',
                 'weight_processing': weight_processing,
                 'epsilon_identifiability': epsilon_identifiability,
                 'selected_samples': 0,
@@ -222,78 +228,72 @@ class SamplingEngine:
             else:
                 return np.array([]), np.array([]), np.array([]), np.array([]), empty_stats
         
-        selected_indices = []
-        selected_weights = []
-        selected_flags = []
-        
-        num_identifiable_selected = 0
+        # Calculate identifiable budget
         max_identifiable_allowed = int(np.floor(epsilon_identifiability * n_samples))
         
-        available_indices = list(range(KN))
-        current_weights = np.maximum(processed_weights.copy(), 1e-9)  # Use processed weights
+        # Prepare sampling pools
+        identifiable_indices = np.where(identifiability_flags == 1)[0]
+        non_identifiable_indices = np.where(identifiability_flags == 0)[0]
+        
+        # Extract weights for each pool
+        if len(identifiable_indices) > 0:
+            identifiable_weights = processed_weights[identifiable_indices]
+            identifiable_weights_normalized = identifiable_weights / np.sum(identifiable_weights)
+        else:
+            identifiable_weights_normalized = np.array([])
+        
+        if len(non_identifiable_indices) > 0:
+            non_identifiable_weights = processed_weights[non_identifiable_indices]
+            non_identifiable_weights_normalized = non_identifiable_weights / np.sum(non_identifiable_weights)
+        else:
+            non_identifiable_weights_normalized = np.array([])
+        
+        # Prepare all samples weights for initial sampling
+        all_weights_normalized = processed_weights / np.sum(processed_weights)
+        
+        selected_indices = []
+        num_identifiable_selected = 0
         
         if self.verbose:
             print(f"Max identifiable samples allowed: {max_identifiable_allowed}")
+            print(f"Identifiable pool size: {len(identifiable_indices)}")
+            print(f"Non-identifiable pool size: {len(non_identifiable_indices)}")
         
         for step in range(n_samples):
-            if not available_indices:
-                if self.verbose:
-                    print(f"Warning: Ran out of samples at step {step+1}")
-                break
-            
-            # Compute sampling weights for available samples
-            temp_weights = np.zeros(len(available_indices))
-            
-            for i, idx in enumerate(available_indices):
-                # If sample is identifiable and quota is full, assign minimal weight
-                if (identifiability_flags[idx] == 1 and 
-                    num_identifiable_selected >= max_identifiable_allowed):
-                    temp_weights[i] = 1e-9
-                else:
-                    temp_weights[i] = current_weights[idx]
-            
-            # Check if we have valid weights
-            if np.sum(temp_weights) < 1e-8:
-                # Fallback: uniform sampling from eligible samples
-                eligible_indices = []
-                for i, idx in enumerate(available_indices):
-                    if not (identifiability_flags[idx] == 1 and 
-                           num_identifiable_selected >= max_identifiable_allowed):
-                        eligible_indices.append(i)
-                
-                if eligible_indices:
-                    temp_weights = np.zeros(len(available_indices))
-                    for i in eligible_indices:
-                        temp_weights[i] = 1.0 / len(eligible_indices)
-                else:
-                    # No eligible samples - may need to violate constraint
+            # Decide which pool to sample from
+            if num_identifiable_selected < max_identifiable_allowed and len(identifiable_indices) > 0:
+                # Budget not exhausted, sample from all samples
+                chosen_idx = np.random.choice(KN, p=all_weights_normalized)
+            else:
+                # Budget exhausted or no identifiable samples, sample only from non-identifiable
+                if len(non_identifiable_indices) == 0:
                     if self.verbose:
-                        print(f"Warning: May exceed identifiability constraint at step {step+1}")
-                    temp_weights = np.ones(len(available_indices)) / len(available_indices)
+                        print(f"Warning: No non-identifiable samples available at step {step+1}")
+                    # Fallback: must sample from identifiable (will violate constraint)
+                    if len(identifiable_indices) > 0:
+                        chosen_idx = np.random.choice(identifiable_indices, p=identifiable_weights_normalized)
+                    else:
+                        # This should not happen in practice
+                        chosen_idx = np.random.choice(KN)
+                else:
+                    # Sample from non-identifiable pool using their importance weights
+                    chosen_pool_idx = np.random.choice(len(non_identifiable_indices), p=non_identifiable_weights_normalized)
+                    chosen_idx = non_identifiable_indices[chosen_pool_idx]
             
-            # Normalize weights
-            temp_weights = temp_weights / np.sum(temp_weights)
-            
-            # Sample one index
-            chosen_pool_idx = np.random.choice(len(available_indices), p=temp_weights)
-            chosen_original_idx = available_indices[chosen_pool_idx]
-            
-            # Store selection
-            selected_indices.append(chosen_original_idx)
-            selected_weights.append(importance_weights[chosen_original_idx])  # Store original weights
-            selected_flags.append(identifiability_flags[chosen_original_idx])
+            # Record selection
+            selected_indices.append(chosen_idx)
             
             # Update identifiable count
-            if identifiability_flags[chosen_original_idx] == 1:
+            if identifiability_flags[chosen_idx] == 1:
                 num_identifiable_selected += 1
-            
-            # Remove from available pool
-            available_indices.pop(chosen_pool_idx)
             
             # Progress update
             if self.verbose and (step + 1) % max(1, n_samples // 10) == 0:
                 print(f"  Selected {step + 1}/{n_samples} samples, "
-                      f"identifiable: {num_identifiable_selected}")
+                    f"identifiable: {num_identifiable_selected}")
+        
+        # Convert to arrays
+        selected_indices = np.array(selected_indices)
         
         # Extract selected data
         if isinstance(synthetic_data, pd.DataFrame):
@@ -301,33 +301,38 @@ class SamplingEngine:
         else:
             selected_data = synthetic_data[selected_indices]
         
-        selected_weights = np.array(selected_weights)
-        selected_flags = np.array(selected_flags)
-        selected_indices = np.array(selected_indices)
+        selected_weights = importance_weights[selected_indices]  # Return original weights
+        selected_flags = identifiability_flags[selected_indices]
         
         actual_identifiable_count = np.sum(selected_flags)
-        actual_identifiable_ratio = np.mean(selected_flags)
+        actual_identifiable_ratio = actual_identifiable_count / len(selected_flags)
         
         stats_dict = {
-            'method': 'sir_ic',
+            'method': 'sir_ic_improved',
             'weight_processing': weight_processing,
             'epsilon_identifiability': epsilon_identifiability,
             'max_identifiable_allowed': max_identifiable_allowed,
             'selected_samples': len(selected_data),
             'identifiable_samples': actual_identifiable_count,
             'identifiable_percentage': actual_identifiable_ratio,
-            'constraint_violated': actual_identifiable_ratio > epsilon_identifiability
+            'constraint_violated': actual_identifiable_ratio > epsilon_identifiability,
+            'identifiable_pool_size': len(identifiable_indices),
+            'non_identifiable_pool_size': len(non_identifiable_indices)
         }
         
         # Report results
         if self.verbose:
-            print(f"\nSIR-IC sampling complete:")
+            print(f"\nImproved SIR-IC sampling complete:")
             print(f"  Selected samples: {len(selected_data)}")
             print(f"  Identifiable samples: {actual_identifiable_count}/{len(selected_data)}")
             print(f"  Identifiable ratio: {actual_identifiable_ratio:.4f} (target: ≤{epsilon_identifiability:.4f})")
+            print(f"  Weight statistics - Min: {np.min(selected_weights):.4f}, "
+                f"Max: {np.max(selected_weights):.4f}, "
+                f"Mean: {np.mean(selected_weights):.4f}")
             
             if actual_identifiable_ratio > epsilon_identifiability:
                 print(f"  Warning: Identifiability constraint exceeded!")
+                print(f"  This may happen when non-identifiable pool is insufficient")
         
         return selected_data, selected_weights, selected_flags, selected_indices, stats_dict
     
