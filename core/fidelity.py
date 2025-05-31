@@ -86,7 +86,7 @@ class FidelityClassifier:
             autoencoder_hidden_dims: Optional[List[int]] = None,
             # Classifier parameters
             classifier_test_size: float = 0.2,
-            mlp_hidden_layer_sizes: Tuple[int, ...] = (100, 50),
+            mlp_hidden_layer_sizes: Tuple[int, ...] = (120, 60),
             show_calibration_plot: bool = True) -> Tuple[float, float]:
         """
         Fit the complete fidelity classification pipeline.
