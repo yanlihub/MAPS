@@ -1038,7 +1038,7 @@ def plot_evaluation_results(results, separate_figures=False, figsize=None):
         figsize: tuple, optional, figure size for individual plots
     """
     # Prepare data for plotting
-    scenarios = ['Raw Synthetic\n→ Real', 'Refined Synthetic\n→ Real', 'Real Train\n→ Real Test\n(Baseline)']
+    scenarios = ['Raw Synthetic\n→ Real', 'Refined Synthetic\n→ Real', 'Real Train\n→ Real Test\n("Oracle")']
     test_accuracies = [
         results['raw_synthetic']['test_accuracy'],
         results['refined_synthetic']['test_accuracy'],
