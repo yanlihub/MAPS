@@ -503,7 +503,7 @@ def plot_evaluation_results(results, separate_figures=False, figsize=None):
             ax3.bar(scenarios, test_roc_aucs, color=colors, alpha=0.7)
             ax3.set_title('Test ROC-AUC Comparison')
             ax3.set_ylabel('ROC-AUC Score')
-            ax3.set_ylim(0, 1.05)
+            ax3.set_ylim(0, 1.10)
             ax3.grid(False)
             for i, v in enumerate(test_roc_aucs):
                 ax3.text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom')
