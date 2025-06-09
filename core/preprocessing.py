@@ -55,135 +55,6 @@ def identify_column_types(df1: pd.DataFrame, df2: pd.DataFrame) -> Tuple[List[st
     
     return numerical_cols, categorical_cols, binary_cols
 
-
-# class DataPreprocessorForAutoencoder:
-#     """
-#     Data preprocessor for autoencoder training and fidelity classification.
-#     Uses MinMaxScaler and one-hot encoding.
-#     """
-    
-#     def __init__(self, verbose: bool = True):
-#         self.verbose = verbose
-#         self.encoders = {}
-#         self.numerical_cols = []
-#         self.categorical_cols = []
-#         self.binary_cols = []
-#         self.encoded_cols = []
-#         self.fitted = False
-
-#     def transform(self, real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-#         """
-#         Transform data using already fitted encoders.
-        
-#         Args:
-#             real_df: Real data DataFrame
-#             synthetic_df: Synthetic data DataFrame
-            
-#         Returns:
-#             Tuple of (processed_real_df, processed_synthetic_df)
-#         """
-#         if not self.fitted:
-#             raise ValueError("Preprocessor must be fitted before transforming")
-        
-#         # Apply the same transformations using stored encoders
-#         # This is a simplified version - adapt to your actual preprocessing logic
-#         processed_real_df = self._apply_transformations(real_df)
-#         processed_synthetic_df = self._apply_transformations(synthetic_df)
-        
-#         return processed_real_df, processed_synthetic_df
-    
-#     def fit_transform(self, real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any], List[str], List[str]]:
-#         """
-#         Fit preprocessor and transform both dataframes.
-        
-#         Args:
-#             real_df: Real data DataFrame
-#             synthetic_df: Synthetic data DataFrame
-            
-#         Returns:
-#             Tuple of (processed_real_df, processed_synthetic_df, encoders, numerical_cols, encoded_cols)
-#         """
-#         if self.verbose:
-#             print("Starting data preprocessing for autoencoder...")
-#             print(f"Real data shape: {real_df.shape}")
-#             print(f"Synthetic data shape: {synthetic_df.shape}")
-        
-#         # Ensure same columns
-#         common_cols = list(set(real_df.columns) & set(synthetic_df.columns))
-#         if len(common_cols) < len(real_df.columns) or len(common_cols) < len(synthetic_df.columns):
-#             if self.verbose:
-#                 print(f"Using {len(common_cols)} common columns")
-        
-#         real_df = real_df[common_cols].copy()
-#         synthetic_df = synthetic_df[common_cols].copy()
-        
-#         # Identify column types
-#         self.numerical_cols, self.categorical_cols, self.binary_cols = identify_column_types(real_df, synthetic_df)
-        
-#         if self.verbose:
-#             print(f"Identified {len(self.numerical_cols)} numerical, {len(self.categorical_cols)} categorical, {len(self.binary_cols)} binary columns")
-        
-#         # Initialize processed dataframes
-#         processed_real_df = pd.DataFrame()
-#         processed_synthetic_df = pd.DataFrame()
-#         self.encoders = {}
-#         self.encoded_cols = []
-        
-#         # Handle numerical columns with imputation and MinMaxScaling
-#         for col in self.numerical_cols:
-#             median_value = real_df[col].median()
-#             processed_real_df[col] = real_df[col].fillna(median_value)
-#             processed_synthetic_df[col] = synthetic_df[col].fillna(median_value)
-#             self.encoded_cols.append(col)
-        
-#         # MinMaxScale numerical columns
-#         if self.numerical_cols:
-#             scaler = MinMaxScaler()
-#             scaled_real = scaler.fit_transform(processed_real_df[self.numerical_cols])
-#             scaled_synthetic = scaler.transform(processed_synthetic_df[self.numerical_cols])
-            
-#             processed_real_df[self.numerical_cols] = scaled_real
-#             processed_synthetic_df[self.numerical_cols] = scaled_synthetic
-#             self.encoders['numerical_scaler'] = scaler
-        
-#         # Handle binary columns
-#         for col in self.binary_cols:
-#             unique_values = pd.concat([real_df[col], synthetic_df[col]]).dropna().unique()
-            
-#             if len(unique_values) <= 2:
-#                 if len(unique_values) == 1:
-#                     mapping = {unique_values[0]: 0}
-#                 else:
-#                     sorted_values = sorted(unique_values)
-#                     mapping = {sorted_values[0]: 0, sorted_values[1]: 1}
-                
-#                 processed_real_df[col] = real_df[col].map(mapping).fillna(0)
-#                 processed_synthetic_df[col] = synthetic_df[col].map(mapping).fillna(0)
-#                 self.encoders[f'binary_mapping_{col}'] = mapping
-#                 self.encoded_cols.append(col)
-        
-#         # Handle categorical columns with one-hot encoding
-#         for col in self.categorical_cols:
-#             unique_categories = pd.concat([real_df[col], synthetic_df[col]]).dropna().unique()
-            
-#             for category in unique_categories:
-#                 new_col = f"{col}_{category}"
-#                 processed_real_df[new_col] = (real_df[col] == category).astype(int)
-#                 processed_synthetic_df[new_col] = (synthetic_df[col] == category).astype(int)
-#                 self.encoded_cols.append(new_col)
-            
-#             self.encoders[f'categories_{col}'] = list(unique_categories)
-        
-#         # Fill any remaining NaN and ensure float32
-#         processed_real_df = processed_real_df.fillna(0).astype(np.float32)
-#         processed_synthetic_df = processed_synthetic_df.fillna(0).astype(np.float32)
-        
-#         if self.verbose:
-#             print(f"Preprocessing complete. Shape: {processed_real_df.shape}")
-        
-#         self.fitted = True
-#         return processed_real_df, processed_synthetic_df, self.encoders, self.numerical_cols, self.encoded_cols
-
 class DataPreprocessorForAutoencoder:
     """
     Data preprocessor for autoencoder training and fidelity classification.
@@ -376,6 +247,111 @@ class DataPreprocessorForAutoencoder:
         return processed_real_df, processed_synthetic_df, self.encoders, self.numerical_cols, self.encoded_cols
 
 
+# class DataPreprocessorForIdentifiability:
+#     """
+#     Data preprocessor for identifiability analysis.
+#     Uses LabelEncoder for categorical variables and different scaling approach.
+#     """
+    
+#     def __init__(self, verbose: bool = True):
+#         self.verbose = verbose
+#         self.encoders = {}
+#         self.numerical_cols = []
+#         self.categorical_cols = []
+#         self.binary_cols = []
+#         self.fitted = False
+        
+#     def fit_transform(self, real_df: pd.DataFrame, synthetic_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any], List[str], List[str]]:
+#         """
+#         Fit preprocessor and transform both dataframes for identifiability analysis.
+        
+#         Args:
+#             real_df: Real data DataFrame
+#             synthetic_df: Synthetic data DataFrame
+            
+#         Returns:
+#             Tuple of (processed_real_df, processed_synthetic_df, encoders, numerical_cols, encoded_cols)
+#         """
+#         if self.verbose:
+#             print("Starting data preprocessing for identifiability analysis...")
+#             print(f"Real data shape: {real_df.shape}")
+#             print(f"Synthetic data shape: {synthetic_df.shape}")
+        
+#         # Ensure same columns
+#         if list(real_df.columns) != list(synthetic_df.columns):
+#             common_cols = list(set(real_df.columns) & set(synthetic_df.columns))
+#             real_df = real_df[common_cols].copy()
+#             synthetic_df = synthetic_df[common_cols].copy()
+#             if self.verbose:
+#                 print(f"Using {len(common_cols)} common columns")
+#         else:
+#             real_df = real_df.copy()
+#             synthetic_df = synthetic_df.copy()
+        
+#         # Identify column types
+#         self.numerical_cols, self.categorical_cols, self.binary_cols = identify_column_types(real_df, synthetic_df)
+        
+#         if self.verbose:
+#             print(f"Numerical: {len(self.numerical_cols)}, Categorical: {len(self.categorical_cols)}, Binary: {len(self.binary_cols)}")
+        
+#         processed_real_df = real_df.copy()
+#         processed_synthetic_df = synthetic_df.copy()
+        
+#         self.encoders = {
+#             'numerical_cols': self.numerical_cols,
+#             'categorical_cols': self.categorical_cols,
+#             'binary_cols': self.binary_cols,
+#             'label_encoders': {},
+#             'binary_mappings': {}
+#         }
+        
+#         # Process numerical columns (impute missing values)
+#         for col in self.numerical_cols:
+#             median_value = real_df[col].median()
+#             processed_real_df[col] = real_df[col].fillna(median_value)
+#             processed_synthetic_df[col] = synthetic_df[col].fillna(median_value)
+        
+#         # Handle binary columns
+#         for col in self.binary_cols:
+#             real_col = real_df[col].fillna('__MISSING__')
+#             syn_col = synthetic_df[col].fillna('__MISSING__')
+#             all_values = pd.concat([real_col, syn_col]).unique()
+            
+#             if len(all_values) <= 2:
+#                 if len(all_values) == 1:
+#                     mapping = {all_values[0]: 0}
+#                 else:
+#                     sorted_values = sorted(all_values)
+#                     mapping = {sorted_values[0]: 0, sorted_values[1]: 1}
+                
+#                 processed_real_df[col] = real_col.map(mapping)
+#                 processed_synthetic_df[col] = syn_col.map(mapping)
+#                 self.encoders['binary_mappings'][col] = mapping
+        
+#         # Handle categorical columns with LabelEncoder
+#         for col in self.categorical_cols:
+#             real_col = real_df[col].fillna('__MISSING__')
+#             syn_col = synthetic_df[col].fillna('__MISSING__')
+#             all_values = pd.concat([real_col, syn_col]).unique()
+            
+#             le = LabelEncoder()
+#             le.fit(all_values)
+            
+#             processed_real_df[col] = le.transform(real_col)
+#             processed_synthetic_df[col] = le.transform(syn_col)
+#             self.encoders['label_encoders'][col] = le
+        
+#         # Convert to float32
+#         processed_real_df = processed_real_df.astype(np.float32)
+#         processed_synthetic_df = processed_synthetic_df.astype(np.float32)
+        
+#         if self.verbose:
+#             print(f"Preprocessing complete. Shape: {processed_real_df.shape}")
+        
+#         self.fitted = True
+#         encoded_cols = list(processed_real_df.columns)
+#         return processed_real_df, processed_synthetic_df, self.encoders, self.numerical_cols, encoded_cols
+
 class DataPreprocessorForIdentifiability:
     """
     Data preprocessor for identifiability analysis.
@@ -417,62 +393,88 @@ class DataPreprocessorForIdentifiability:
             real_df = real_df.copy()
             synthetic_df = synthetic_df.copy()
         
-        # Identify column types
+        # Store original dtypes to preserve precision
+        original_dtypes = {}
+        for col in real_df.columns:
+            if pd.api.types.is_numeric_dtype(real_df[col]):
+                original_dtypes[col] = real_df[col].dtype
+        
+        # Merge all datasets to ensure consistent encoding
+        # This follows the source code logic: merge all available datasets for computing the encoder
+        if self.verbose:
+            print("Merging datasets to create consistent encoders...")
+        
+        all_df = pd.concat([real_df, synthetic_df], ignore_index=True)
+        
+        # Identify column types from merged data
         self.numerical_cols, self.categorical_cols, self.binary_cols = identify_column_types(real_df, synthetic_df)
         
         if self.verbose:
             print(f"Numerical: {len(self.numerical_cols)}, Categorical: {len(self.categorical_cols)}, Binary: {len(self.binary_cols)}")
         
-        processed_real_df = real_df.copy()
-        processed_synthetic_df = synthetic_df.copy()
+        # Create encoders from merged dataset following source code logic
+        encoders = {}
         
+        for col in all_df.columns:
+            col_data = all_df[col].copy()
+            
+            # Handle missing values first
+            if col_data.isnull().any():
+                if col in self.numerical_cols:
+                    # For numerical columns, fill with median from merged data
+                    median_value = col_data.median()
+                    col_data = col_data.fillna(median_value)
+                else:
+                    # For categorical/binary, fill with placeholder
+                    col_data = col_data.fillna('__MISSING__')
+            
+            # Follow source code encoding logic
+            if col in self.numerical_cols:
+                # For numerical columns, we don't encode but store median for imputation
+                encoders[f'{col}_median'] = col_data.median()
+                # Store original dtype for precision preservation
+                if col in original_dtypes:
+                    encoders[f'{col}_dtype'] = original_dtypes[col]
+            else:
+                # Check if already integer encoded (min=0, max=unique_count-1)
+                if (col_data.infer_objects().dtype.kind == "i" and 
+                    col_data.min() == 0 and 
+                    col_data.max() == len(col_data.unique()) - 1):
+                    if self.verbose:
+                        print(f"  Column '{col}' already properly integer encoded, skipping")
+                    continue
+                
+                # For object/boolean columns or columns with categorical nature
+                if (col_data.infer_objects().dtype.kind in ["O", "b"] or 
+                    col in self.categorical_cols or col in self.binary_cols):
+                    
+                    # Convert to string for consistent handling
+                    col_data = col_data.astype(str)
+                    
+                    encoder = LabelEncoder().fit(col_data)
+                    encoders[col] = encoder
+                    
+                    if col in self.binary_cols:
+                        if self.verbose:
+                            print(f"  Encoded binary column '{col}': {len(encoder.classes_)} categories")
+                    else:
+                        if self.verbose:
+                            print(f"  Encoded categorical column '{col}': {len(encoder.classes_)} categories")
+        
+        # Now apply encoders to individual datasets
+        processed_real_df = self._apply_encoders(real_df, encoders)
+        processed_synthetic_df = self._apply_encoders(synthetic_df, encoders)
+        
+        # Store encoders in the format expected by the rest of the code
         self.encoders = {
             'numerical_cols': self.numerical_cols,
             'categorical_cols': self.categorical_cols,
             'binary_cols': self.binary_cols,
-            'label_encoders': {},
-            'binary_mappings': {}
+            'label_encoders': {k: v for k, v in encoders.items() if not k.endswith('_median') and not k.endswith('_dtype')},
+            'binary_mappings': {},  # Keep for backward compatibility
+            'medians': {k: v for k, v in encoders.items() if k.endswith('_median')},
+            'dtypes': {k: v for k, v in encoders.items() if k.endswith('_dtype')}
         }
-        
-        # Process numerical columns (impute missing values)
-        for col in self.numerical_cols:
-            median_value = real_df[col].median()
-            processed_real_df[col] = real_df[col].fillna(median_value)
-            processed_synthetic_df[col] = synthetic_df[col].fillna(median_value)
-        
-        # Handle binary columns
-        for col in self.binary_cols:
-            real_col = real_df[col].fillna('__MISSING__')
-            syn_col = synthetic_df[col].fillna('__MISSING__')
-            all_values = pd.concat([real_col, syn_col]).unique()
-            
-            if len(all_values) <= 2:
-                if len(all_values) == 1:
-                    mapping = {all_values[0]: 0}
-                else:
-                    sorted_values = sorted(all_values)
-                    mapping = {sorted_values[0]: 0, sorted_values[1]: 1}
-                
-                processed_real_df[col] = real_col.map(mapping)
-                processed_synthetic_df[col] = syn_col.map(mapping)
-                self.encoders['binary_mappings'][col] = mapping
-        
-        # Handle categorical columns with LabelEncoder
-        for col in self.categorical_cols:
-            real_col = real_df[col].fillna('__MISSING__')
-            syn_col = synthetic_df[col].fillna('__MISSING__')
-            all_values = pd.concat([real_col, syn_col]).unique()
-            
-            le = LabelEncoder()
-            le.fit(all_values)
-            
-            processed_real_df[col] = le.transform(real_col)
-            processed_synthetic_df[col] = le.transform(syn_col)
-            self.encoders['label_encoders'][col] = le
-        
-        # Convert to float32
-        processed_real_df = processed_real_df.astype(np.float32)
-        processed_synthetic_df = processed_synthetic_df.astype(np.float32)
         
         if self.verbose:
             print(f"Preprocessing complete. Shape: {processed_real_df.shape}")
@@ -480,3 +482,97 @@ class DataPreprocessorForIdentifiability:
         self.fitted = True
         encoded_cols = list(processed_real_df.columns)
         return processed_real_df, processed_synthetic_df, self.encoders, self.numerical_cols, encoded_cols
+    
+    def _apply_encoders(self, df: pd.DataFrame, encoders: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Apply encoders to a dataframe following the source code logic.
+        
+        Args:
+            df: DataFrame to encode
+            encoders: Dictionary of fitted encoders
+            
+        Returns:
+            Encoded DataFrame
+        """
+        encoded = df.copy()
+        
+        for col in encoded.columns:
+            if col in encoders:
+                # Apply label encoder for categorical/binary columns
+                col_data = encoded[col].copy()
+                
+                # Handle missing values
+                if col_data.isnull().any():
+                    if col in self.numerical_cols:
+                        # Use stored median for numerical columns
+                        median_key = f'{col}_median'
+                        if median_key in encoders:
+                            col_data = col_data.fillna(encoders[median_key])
+                    else:
+                        col_data = col_data.fillna('__MISSING__')
+                
+                if col not in self.numerical_cols:
+                    # Convert to string and apply encoder
+                    col_data = col_data.astype(str)
+                    
+                    try:
+                        encoded[col] = encoders[col].transform(col_data)
+                        # Convert encoded categorical to int64 to maintain precision
+                        encoded[col] = encoded[col].astype('int64')
+                    except ValueError as e:
+                        # Handle unseen categories by mapping them to a default value
+                        if self.verbose:
+                            print(f"  Warning: Unseen categories in '{col}', using fallback encoding")
+                        # Get known categories
+                        known_categories = set(encoders[col].classes_)
+                        # Map unknown categories to the first known category
+                        col_data_mapped = col_data.apply(
+                            lambda x: x if x in known_categories else encoders[col].classes_[0]
+                        )
+                        encoded[col] = encoders[col].transform(col_data_mapped)
+                        encoded[col] = encoded[col].astype('int64')
+                else:
+                    # For numerical columns, preserve original dtype and precision
+                    encoded[col] = col_data
+                    # Restore original dtype if available
+                    dtype_key = f'{col}_dtype'
+                    if dtype_key in encoders:
+                        try:
+                            encoded[col] = encoded[col].astype(encoders[dtype_key])
+                        except (ValueError, TypeError):
+                            # If conversion fails, keep as is but ensure it's numeric
+                            encoded[col] = pd.to_numeric(encoded[col], errors='coerce')
+            
+            elif f'{col}_median' in encoders:
+                # Handle numerical columns with median imputation
+                col_data = encoded[col].copy()
+                if col_data.isnull().any():
+                    col_data = col_data.fillna(encoders[f'{col}_median'])
+                
+                # Preserve original dtype
+                dtype_key = f'{col}_dtype'
+                if dtype_key in encoders:
+                    try:
+                        encoded[col] = col_data.astype(encoders[dtype_key])
+                    except (ValueError, TypeError):
+                        encoded[col] = pd.to_numeric(col_data, errors='coerce')
+                else:
+                    encoded[col] = col_data
+        
+        # Final cleanup: only convert problematic object columns to numeric
+        for col in encoded.columns:
+            if encoded[col].dtype == 'object' and col not in self.categorical_cols and col not in self.binary_cols:
+                if self.verbose:
+                    print(f"  Warning: Column '{col}' still contains non-numeric data, converting to numeric")
+                encoded[col] = pd.to_numeric(encoded[col], errors='coerce').fillna(0)
+        
+        # Replace infinite values with 0 but preserve dtypes
+        for col in encoded.columns:
+            if pd.api.types.is_numeric_dtype(encoded[col]):
+                if np.isinf(encoded[col]).any():
+                    col_dtype = encoded[col].dtype
+                    encoded[col] = encoded[col].replace([np.inf, -np.inf], 0)
+                    # Restore dtype after replacement
+                    encoded[col] = encoded[col].astype(col_dtype)
+        
+        return encoded
