@@ -3,16 +3,25 @@ Utility Evaluation for C-MAPS Framework
 Train on Synthetic, Test on Real approach with Random Forest
 Fixed to properly handle cross-validation: Train on Synthetic, Validate on Real
 """
-
-import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import cross_val_score, StratifiedKFold, train_test_split, KFold
-from sklearn.metrics import classification_report, accuracy_score, f1_score, roc_auc_score
-from sklearn.preprocessing import LabelEncoder
+import pandas as pd
+import warnings
+
 import matplotlib.pyplot as plt
 import seaborn as sns
-import warnings
+
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import (
+    train_test_split, cross_val_score, StratifiedKFold, KFold
+)
+from sklearn.metrics import (
+    classification_report, accuracy_score, f1_score, roc_auc_score,
+    adjusted_rand_score, adjusted_mutual_info_score, silhouette_score
+)
+from scipy import stats
+from sklearn.cluster import KMeans
+
 
 warnings.filterwarnings('ignore')
 
@@ -710,3 +719,237 @@ def debug_data_types(real_data, raw_synthetic_data, refined_synthetic_data, targ
         
         print(f"  Total categorical features: {len(categorical_cols)}")
         print(f"  Data types: {data.dtypes.value_counts().to_dict()}")
+
+def run_clustering_evaluation_corrected(real_data, raw_synthetic_data, refined_synthetic_data,
+                                      n_clusters_range=range(2, 16), selected_k=5, 
+                                      exclude_columns=None, test_size=0.2, random_state=42):
+    """
+    Evaluate K-means clustering with proper train/test splits and BIC analysis.
+    """
+    print("=" * 80)
+    print("K-MEANS CLUSTERING EVALUATION (CORRECTED)")
+    print("=" * 80)
+    
+    # Prepare data
+    if exclude_columns is None:
+        exclude_columns = []
+    
+    # Get numeric columns only
+    numeric_cols = []
+    for col in real_data.columns:
+        if col not in exclude_columns and pd.api.types.is_numeric_dtype(real_data[col]):
+            numeric_cols.append(col)
+    
+    print(f"Using {len(numeric_cols)} numeric features for clustering")
+    
+    # Split real data into train/test
+    from sklearn.model_selection import train_test_split
+    real_train, real_test = train_test_split(
+        real_data[numeric_cols].fillna(0), 
+        test_size=test_size, 
+        random_state=random_state
+    )
+    
+    print(f"Real data split: {len(real_train)} train, {len(real_test)} test")
+    
+    # Standardize features
+    scaler = StandardScaler()
+    real_train_scaled = scaler.fit_transform(real_train)
+    real_test_scaled = scaler.transform(real_test)
+    
+    # Scale synthetic data using same scaler
+    raw_syn_scaled = scaler.transform(raw_synthetic_data[numeric_cols].fillna(0))
+    refined_syn_scaled = scaler.transform(refined_synthetic_data[numeric_cols].fillna(0))
+    
+    results = {
+        'bic_analysis': {},
+        'clustering_agreement': {},
+        'cluster_quality': {}
+    }
+    
+    # 1. BIC Analysis (like in the paper)
+    print("\nPerforming BIC analysis...")
+    
+    datasets = {
+        'real_train': real_train_scaled,
+        'raw_synthetic': raw_syn_scaled,
+        'refined_synthetic': refined_syn_scaled
+    }
+    
+    for name, data in datasets.items():
+        bic_scores = []
+        aic_scores = []
+        inertias = []
+        
+        for k in n_clusters_range:
+            kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+            kmeans.fit(data)
+            
+            # Calculate BIC and AIC
+            # BIC = n_clusters * log(n_samples) + 2 * inertia
+            # AIC = 2 * n_clusters + 2 * inertia
+            n_samples = len(data)
+            bic = k * np.log(n_samples) + kmeans.inertia_
+            aic = 2 * k + kmeans.inertia_
+            
+            bic_scores.append(bic)
+            aic_scores.append(aic)
+            inertias.append(kmeans.inertia_)
+        
+        results['bic_analysis'][name] = {
+            'n_clusters': list(n_clusters_range),
+            'bic_scores': bic_scores,
+            'aic_scores': aic_scores,
+            'inertias': inertias
+        }
+    
+    # 2. Clustering Agreement Analysis (proper train/test)
+    print(f"\nEvaluating clustering agreement with k={selected_k}...")
+    
+    # Fit models on training data
+    kmeans_real = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
+    kmeans_real.fit(real_train_scaled)
+    
+    kmeans_raw = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
+    kmeans_raw.fit(raw_syn_scaled)
+    
+    kmeans_refined = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
+    kmeans_refined.fit(refined_syn_scaled)
+    
+    # Predict on real test set (common evaluation set)
+    real_test_labels = kmeans_real.predict(real_test_scaled)
+    raw_test_labels = kmeans_raw.predict(real_test_scaled)
+    refined_test_labels = kmeans_refined.predict(real_test_scaled)
+    
+    # Calculate agreement metrics
+    raw_ari = adjusted_rand_score(real_test_labels, raw_test_labels)
+    refined_ari = adjusted_rand_score(real_test_labels, refined_test_labels)
+    
+    raw_ami = adjusted_mutual_info_score(real_test_labels, raw_test_labels)
+    refined_ami = adjusted_mutual_info_score(real_test_labels, refined_test_labels)
+    
+    results['clustering_agreement'] = {
+        'raw_synthetic': {'ari': raw_ari, 'ami': raw_ami},
+        'refined_synthetic': {'ari': refined_ari, 'ami': refined_ami}
+    }
+    
+    # 3. Cluster Quality Metrics (on test set)
+    real_silhouette = silhouette_score(real_test_scaled, real_test_labels)
+    
+    # For synthetic models, evaluate silhouette on their own test portions
+    raw_test_size = min(len(raw_syn_scaled), len(real_test_scaled))
+    refined_test_size = min(len(refined_syn_scaled), len(real_test_scaled))
+    
+    raw_test_indices = np.random.RandomState(random_state).choice(
+        len(raw_syn_scaled), raw_test_size, replace=False)
+    refined_test_indices = np.random.RandomState(random_state).choice(
+        len(refined_syn_scaled), refined_test_size, replace=False)
+    
+    raw_test_data = raw_syn_scaled[raw_test_indices]
+    refined_test_data = refined_syn_scaled[refined_test_indices]
+    
+    raw_test_labels_own = kmeans_raw.predict(raw_test_data)
+    refined_test_labels_own = kmeans_refined.predict(refined_test_data)
+    
+    raw_silhouette = silhouette_score(raw_test_data, raw_test_labels_own)
+    refined_silhouette = silhouette_score(refined_test_data, refined_test_labels_own)
+    
+    results['cluster_quality'] = {
+        'real': real_silhouette,
+        'raw_synthetic': raw_silhouette,
+        'refined_synthetic': refined_silhouette
+    }
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print("CLUSTERING EVALUATION RESULTS")
+    print('='*60)
+    
+    print(f"{'Metric':<30} {'Raw Synthetic':<20} {'Refined Synthetic':<20}")
+    print("-" * 70)
+    print(f"{'Adjusted Rand Index':<30} {raw_ari:<20.4f} {refined_ari:<20.4f}")
+    print(f"{'Adjusted Mutual Info':<30} {raw_ami:<20.4f} {refined_ami:<20.4f}")
+    print(f"{'Silhouette Score':<30} {raw_silhouette:<20.4f} {refined_silhouette:<20.4f}")
+    
+    print(f"\nReference silhouette score (real test): {real_silhouette:.4f}")
+    
+    return results
+
+
+def plot_clustering_results_corrected(results):
+    """
+    Visualize corrected clustering evaluation results.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # 1. BIC Analysis (like in the paper)
+    for name, data in results['bic_analysis'].items():
+        label = name.replace('_', ' ').title()
+        axes[0, 0].plot(data['n_clusters'], data['bic_scores'], 
+                       marker='o', label=label)
+    
+    axes[0, 0].set_xlabel('Number of Clusters')
+    axes[0, 0].set_ylabel('BIC Score')
+    axes[0, 0].set_title('Bayesian Information Criterion')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # 2. Inertia (Elbow Method)
+    for name, data in results['bic_analysis'].items():
+        label = name.replace('_', ' ').title()
+        axes[0, 1].plot(data['n_clusters'], data['inertias'], 
+                       marker='o', label=label)
+    
+    axes[0, 1].set_xlabel('Number of Clusters')
+    axes[0, 1].set_ylabel('Inertia')
+    axes[0, 1].set_title('Elbow Method Analysis')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # 3. Clustering Agreement Metrics (fixed)
+    metrics = ['ARI', 'AMI']
+    raw_values = [
+        results['clustering_agreement']['raw_synthetic']['ari'],
+        results['clustering_agreement']['raw_synthetic']['ami']
+    ]
+    refined_values = [
+        results['clustering_agreement']['refined_synthetic']['ari'],
+        results['clustering_agreement']['refined_synthetic']['ami']
+    ]
+    
+    x = np.arange(len(metrics))
+    width = 0.35
+    
+    axes[1, 0].bar(x - width/2, raw_values, width, label='Raw Synthetic', 
+                   color='#ff7f7f', alpha=0.7)
+    axes[1, 0].bar(x + width/2, refined_values, width, label='Refined Synthetic', 
+                   color='#7fbf7f', alpha=0.7)
+    axes[1, 0].set_ylabel('Score')
+    axes[1, 0].set_title('Clustering Agreement with Real Data')
+    axes[1, 0].set_xticks(x)
+    axes[1, 0].set_xticklabels(metrics)
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].set_ylim(0, 1)
+    
+    # 4. Silhouette Score Comparison (separate plot)
+    sil_scores = [
+        results['cluster_quality']['real'],
+        results['cluster_quality']['raw_synthetic'],
+        results['cluster_quality']['refined_synthetic']
+    ]
+    labels = ['Real', 'Raw Synthetic', 'Refined Synthetic']
+    colors = ['#7f7fff', '#ff7f7f', '#7fbf7f']
+    
+    axes[1, 1].bar(labels, sil_scores, color=colors, alpha=0.7)
+    axes[1, 1].set_ylabel('Silhouette Score')
+    axes[1, 1].set_title('Cluster Quality (Silhouette Score)')
+    axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_ylim(0, max(sil_scores) * 1.1)
+    
+    # Add value labels on bars
+    for i, v in enumerate(sil_scores):
+        axes[1, 1].text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom')
+    
+    plt.tight_layout()
+    plt.show()
