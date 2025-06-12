@@ -720,7 +720,7 @@ def debug_data_types(real_data, raw_synthetic_data, refined_synthetic_data, targ
         print(f"  Total categorical features: {len(categorical_cols)}")
         print(f"  Data types: {data.dtypes.value_counts().to_dict()}")
 
-def run_clustering_evaluation_corrected(real_data, raw_synthetic_data, refined_synthetic_data,
+def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_data,
                                       n_clusters_range=range(2, 16), selected_k=5, 
                                       exclude_columns=None, test_size=0.2, random_state=42):
     """
@@ -876,7 +876,7 @@ def run_clustering_evaluation_corrected(real_data, raw_synthetic_data, refined_s
     return results
 
 
-def plot_clustering_results_corrected(results):
+def plot_clustering_results(results):
     """
     Visualize corrected clustering evaluation results.
     """
