@@ -248,50 +248,25 @@ def compute_similarity_scores_asymmetric(diff_matrix, n_cat, n_num):
 #                 cbar_kws={'label': 'Correlation Strength'},
 #                 linewidths=0, linecolor='none')
     
-#     # Add colored boxes to indicate different correlation types
-#     # if n_cat > 0 and n_num > 0:
-#     #     # Red box for categorical-categorical (Cramer's V)
-#     #     if n_cat > 1:
-#     #         rect_cat_cat = Rectangle((0, 0), n_cat, n_cat, 
-#     #                                linewidth=5, edgecolor='red', facecolor='none',linestyle='--')
-#     #         ax.add_patch(rect_cat_cat)
-        
-#     #     # Green box for categorical->numerical (Correlation Ratio)
-#     #     rect_cat_num = Rectangle((0, n_cat), n_cat, n_num, 
-#     #                            linewidth=5, edgecolor='green', facecolor='none',linestyle='--')
-#     #     ax.add_patch(rect_cat_num)
-        
-#     #     # Blue box for numerical-numerical (Spearman/Pearson)
-#     #     if n_num > 1:
-#     #         rect_num_num = Rectangle((n_cat, n_cat), n_num, n_num, 
-#     #                                linewidth=5, edgecolor='blue', facecolor='none',linestyle='--')
-#     #         ax.add_patch(rect_num_num)
+#     # Draw colored boxes using plot() with consistent line width
 #     if n_cat > 0 and n_num > 0:
-#         # Define consistent dash pattern for all rectangles
-#         # dash_pattern = [8, 4]  # 8 units line, 4 units gap
+#         line_width = 4
         
-#         # Red dashed box for categorical-categorical
+#         # Red box for categorical-categorical (Cramer's V)
 #         if n_cat > 1:
-#             rect_cat_cat = Rectangle((0, 0), n_cat, n_cat, 
-#                                 linewidth=4, edgecolor='red', facecolor='none',
-#                                 linestyle='-', zorder=10)  # Use solid line with custom dashes
-#             # rect_cat_cat.set_dashes(dash_pattern)  # Apply custom dash pattern
-#             ax.add_patch(rect_cat_cat)
+#             # Draw rectangle using plot
+#             ax.plot([0, n_cat, n_cat, 0, 0], [0, 0, n_cat, n_cat, 0], 
+#                    color='red', linewidth=line_width, linestyle='--')
         
-#         # Green dashed box for categorical->numerical
-#         rect_cat_num = Rectangle((0, n_cat), n_cat, n_num, 
-#                             linewidth=4, edgecolor='green', facecolor='none',
-#                             linestyle='-', zorder=10)
-#         # rect_cat_num.set_dashes(dash_pattern)  # Same dash pattern
-#         ax.add_patch(rect_cat_num)
+#         # Green box for categorical->numerical (Correlation Ratio)
+#         ax.plot([0, n_cat, n_cat, 0, 0], [n_cat, n_cat, n_cat+n_num, n_cat+n_num, n_cat], 
+#                color='green', linewidth=line_width, linestyle='--')
         
-#         # Blue dashed box for numerical-numerical
+#         # Blue box for numerical-numerical (Spearman/Pearson)
 #         if n_num > 1:
-#             rect_num_num = Rectangle((n_cat, n_cat), n_num, n_num, 
-#                                 linewidth=4, edgecolor='blue', facecolor='none',
-#                                 linestyle='-', zorder=10)
-#             # rect_num_num.set_dashes(dash_pattern)  # Same dash pattern
-#             ax.add_patch(rect_num_num)
+#             ax.plot([n_cat, n_cat+n_num, n_cat+n_num, n_cat, n_cat], 
+#                    [n_cat, n_cat, n_cat+n_num, n_cat+n_num, n_cat], 
+#                    color='blue', linewidth=line_width, linestyle='--')
     
 #     # Add legend for colored boxes
 #     from matplotlib.patches import Patch
@@ -316,22 +291,14 @@ def compute_similarity_scores_asymmetric(diff_matrix, n_cat, n_num):
 #     plt.xticks(rotation=45, ha='right')
 #     plt.ylabel('Variables (Rows)', fontsize=12)
 #     plt.xlabel('Variables (Columns)', fontsize=12)
-
-#     # remove the grid of the heatmap
 #     plt.grid(False)
-    
-#     # Add explanatory text
-#     # plt.figtext(0.02, 0.02, 
-#     #             'Note: Only lower triangle shown due to asymmetric correlation ratios.\n'
-#     #             'Categorical→Numerical shows η² (categorical explains numerical variance).',
-#     #             fontsize=10, style='italic')
-    
 #     plt.tight_layout()
 #     return fig, ax
 
 def plot_asymmetric_correlation_matrix(corr_matrix, n_cat, n_num, title, figsize=(10, 8)):
     """
     Plot asymmetric correlation matrix with colored boxes indicating different correlation types.
+    Fixed version with non-overlapping boxes and consistent line widths.
     """
     
     fig, ax = plt.subplots(figsize=figsize)
@@ -347,25 +314,36 @@ def plot_asymmetric_correlation_matrix(corr_matrix, n_cat, n_num, title, figsize
                 cbar_kws={'label': 'Correlation Strength'},
                 linewidths=0, linecolor='none')
     
-    # Draw colored boxes using plot() with consistent line width
+    # Draw non-overlapping colored boxes using Rectangle patches
     if n_cat > 0 and n_num > 0:
-        line_width = 4
+        line_width = 3  # Consistent line width
+        offset = 0.05   # Small offset to prevent overlap
+        
+        # Import Rectangle here if not already imported
+        from matplotlib.patches import Rectangle
         
         # Red box for categorical-categorical (Cramer's V)
         if n_cat > 1:
-            # Draw rectangle using plot
-            ax.plot([0, n_cat, n_cat, 0, 0], [0, 0, n_cat, n_cat, 0], 
-                   color='red', linewidth=line_width, linestyle='--')
+            rect_red = Rectangle((offset, offset), 
+                               n_cat - 2*offset, n_cat - 2*offset,
+                               linewidth=line_width, edgecolor='red', 
+                               facecolor='none', linestyle='--')
+            ax.add_patch(rect_red)
         
         # Green box for categorical->numerical (Correlation Ratio)
-        ax.plot([0, n_cat, n_cat, 0, 0], [n_cat, n_cat, n_cat+n_num, n_cat+n_num, n_cat], 
-               color='green', linewidth=line_width, linestyle='--')
+        rect_green = Rectangle((offset, n_cat + offset), 
+                             n_cat - 2*offset, n_num - 2*offset,
+                             linewidth=line_width, edgecolor='green', 
+                             facecolor='none', linestyle='--')
+        ax.add_patch(rect_green)
         
         # Blue box for numerical-numerical (Spearman/Pearson)
         if n_num > 1:
-            ax.plot([n_cat, n_cat+n_num, n_cat+n_num, n_cat, n_cat], 
-                   [n_cat, n_cat, n_cat+n_num, n_cat+n_num, n_cat], 
-                   color='blue', linewidth=line_width, linestyle='--')
+            rect_blue = Rectangle((n_cat + offset, n_cat + offset), 
+                                n_num - 2*offset, n_num - 2*offset,
+                                linewidth=line_width, edgecolor='blue', 
+                                facecolor='none', linestyle='--')
+            ax.add_patch(rect_blue)
     
     # Add legend for colored boxes
     from matplotlib.patches import Patch
