@@ -908,35 +908,99 @@ def print_summary_table(results):
     print("\nNote: CV for synthetic scenarios uses 'Train on Synthetic, Validate on Real'")
     print("      CV for real scenario uses standard 'Train on Real, Validate on Real'")
 
+########################### below is the clustering evaluation function ###########################
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score, silhouette_score
+from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
+from scipy import stats
+
+
 def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_data,
-                                      n_clusters_range=range(2, 16), selected_k=5, 
-                                      exclude_columns=None, test_size=0.2, random_state=42):
+                              n_clusters_range=range(2, 16), selected_k=5, 
+                              target_column=None, exclude_columns=None, 
+                              test_size=0.2, cv_folds=5, random_state=42):
     """
-    Evaluate K-means clustering with proper train/test splits and BIC analysis.
+    Evaluate K-means clustering with proper train/test splits, BIC analysis, and cross-validation.
+    
+    Args:
+        real_data: Real dataset
+        raw_synthetic_data: Original synthetic dataset
+        refined_synthetic_data: Refined synthetic dataset (post C-MAPS)
+        n_clusters_range: Range of cluster numbers for BIC analysis
+        selected_k: Number of clusters for detailed evaluation
+        target_column: Column name containing true labels for ARI/AMI calculation (optional)
+        exclude_columns: Columns to exclude from clustering features
+        test_size: Proportion for train/test split
+        cv_folds: Number of cross-validation folds
+        random_state: Random seed
+        
+    Note:
+        If target_column is provided, uses it as ground truth for ARI/AMI.
+        If target_column is None, uses real data clustering predictions as reference.
+        Cross-validation is always performed to get standard deviations.
     """
     print("=" * 80)
-    print("K-MEANS CLUSTERING EVALUATION (CORRECTED)")
+    print("K-MEANS CLUSTERING EVALUATION (CONFIGURABLE LABELS & CV)")
     print("=" * 80)
     
     # Prepare data
     if exclude_columns is None:
         exclude_columns = []
     
-    # Get numeric columns only
+    # Check for target column (now optional)
+    use_true_labels = False
+    if target_column is not None:
+        if target_column in real_data.columns:
+            use_true_labels = True
+            print(f"Using '{target_column}' as ground truth for ARI/AMI calculation")
+            # Add target column to exclude list for clustering features
+            if target_column not in exclude_columns:
+                exclude_columns = exclude_columns + [target_column]
+        else:
+            print(f"Warning: Target column '{target_column}' not found in real_data")
+            print("Will use real data clustering predictions as reference instead")
+    else:
+        print("No target_column specified. Will use real data clustering predictions as reference")
+    
+    # Get numeric columns only (excluding target and other excluded columns)
     numeric_cols = []
     for col in real_data.columns:
         if col not in exclude_columns and pd.api.types.is_numeric_dtype(real_data[col]):
             numeric_cols.append(col)
     
     print(f"Using {len(numeric_cols)} numeric features for clustering")
+    print(f"Excluded columns: {exclude_columns}")
     
-    # Split real data into train/test
-    from sklearn.model_selection import train_test_split
-    real_train, real_test = train_test_split(
-        real_data[numeric_cols].fillna(0), 
-        test_size=test_size, 
-        random_state=random_state
-    )
+    # Prepare datasets
+    real_features = real_data[numeric_cols].fillna(0)
+    real_labels = real_data[target_column] if use_true_labels else None
+    raw_syn_features = raw_synthetic_data[numeric_cols].fillna(0)
+    refined_syn_features = refined_synthetic_data[numeric_cols].fillna(0)
+    
+    # Single train/test split for BIC analysis
+    from sklearn.model_selection import train_test_split, StratifiedKFold
+    
+    if use_true_labels:
+        # Use stratified split if we have true labels
+        real_train, real_test, labels_train, labels_test = train_test_split(
+            real_features, real_labels, 
+            test_size=test_size, 
+            random_state=random_state,
+            stratify=real_labels if len(real_labels.unique()) < len(real_labels) * 0.5 else None
+        )
+    else:
+        # Simple split without labels
+        real_train, real_test = train_test_split(
+            real_features, 
+            test_size=test_size, 
+            random_state=random_state
+        )
+        labels_train, labels_test = None, None
     
     print(f"Real data split: {len(real_train)} train, {len(real_test)} test")
     
@@ -946,12 +1010,13 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
     real_test_scaled = scaler.transform(real_test)
     
     # Scale synthetic data using same scaler
-    raw_syn_scaled = scaler.transform(raw_synthetic_data[numeric_cols].fillna(0))
-    refined_syn_scaled = scaler.transform(refined_synthetic_data[numeric_cols].fillna(0))
+    raw_syn_scaled = scaler.transform(raw_syn_features)
+    refined_syn_scaled = scaler.transform(refined_syn_features)
     
     results = {
         'bic_analysis': {},
         'clustering_agreement': {},
+        'clustering_agreement_cv': {},
         'cluster_quality': {}
     }
     
@@ -974,8 +1039,6 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
             kmeans.fit(data)
             
             # Calculate BIC and AIC
-            # BIC = n_clusters * log(n_samples) + 2 * inertia
-            # AIC = 2 * n_clusters + 2 * inertia
             n_samples = len(data)
             bic = k * np.log(n_samples) + kmeans.inertia_
             aic = 2 * k + kmeans.inertia_
@@ -991,8 +1054,8 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
             'inertias': inertias
         }
     
-    # 2. Clustering Agreement Analysis (proper train/test)
-    print(f"\nEvaluating clustering agreement with k={selected_k}...")
+    # 2. Single Train/Test Evaluation
+    print(f"\nEvaluating clustering agreement with k={selected_k} (single split)...")
     
     # Fit models on training data
     kmeans_real = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
@@ -1004,25 +1067,120 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
     kmeans_refined = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
     kmeans_refined.fit(refined_syn_scaled)
     
-    # Predict on real test set (common evaluation set)
-    real_test_labels = kmeans_real.predict(real_test_scaled)
-    raw_test_labels = kmeans_raw.predict(real_test_scaled)
-    refined_test_labels = kmeans_refined.predict(real_test_scaled)
+    # Predict on real test set
+    real_test_pred = kmeans_real.predict(real_test_scaled)
+    raw_test_pred = kmeans_raw.predict(real_test_scaled)
+    refined_test_pred = kmeans_refined.predict(real_test_scaled)
     
     # Calculate agreement metrics
-    raw_ari = adjusted_rand_score(real_test_labels, raw_test_labels)
-    refined_ari = adjusted_rand_score(real_test_labels, refined_test_labels)
+    if use_true_labels:
+        # Compare with true labels
+        reference_labels = labels_test
+        print("Computing ARI/AMI against true labels...")
+    else:
+        # Use real data clustering predictions as reference
+        reference_labels = real_test_pred
+        print("Computing ARI/AMI against real data clustering predictions...")
     
-    raw_ami = adjusted_mutual_info_score(real_test_labels, raw_test_labels)
-    refined_ami = adjusted_mutual_info_score(real_test_labels, refined_test_labels)
+    real_ari = adjusted_rand_score(reference_labels, real_test_pred)
+    raw_ari = adjusted_rand_score(reference_labels, raw_test_pred)
+    refined_ari = adjusted_rand_score(reference_labels, refined_test_pred)
+    
+    real_ami = adjusted_mutual_info_score(reference_labels, real_test_pred)
+    raw_ami = adjusted_mutual_info_score(reference_labels, raw_test_pred)
+    refined_ami = adjusted_mutual_info_score(reference_labels, refined_test_pred)
     
     results['clustering_agreement'] = {
+        'real': {'ari': real_ari, 'ami': real_ami},
         'raw_synthetic': {'ari': raw_ari, 'ami': raw_ami},
         'refined_synthetic': {'ari': refined_ari, 'ami': refined_ami}
     }
     
-    # 3. Cluster Quality Metrics (on test set)
-    real_silhouette = silhouette_score(real_test_scaled, real_test_labels)
+    # 3. Cross-Validation for Robust Statistics (always performed)
+    print(f"\nPerforming {cv_folds}-fold cross-validation...")
+    
+    # Prepare for CV
+    if use_true_labels and len(real_labels.unique()) < len(real_labels) * 0.5:
+        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+        cv_splits = list(cv.split(real_features, real_labels))
+        print("Using stratified CV based on true labels")
+    else:
+        from sklearn.model_selection import KFold
+        cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+        cv_splits = list(cv.split(real_features))
+        print("Using regular CV")
+    
+    # Storage for CV results
+    cv_results = {
+        'real_ari': [], 'real_ami': [],
+        'raw_ari': [], 'raw_ami': [],
+        'refined_ari': [], 'refined_ami': []
+    }
+    
+    for fold, (train_idx, test_idx) in enumerate(cv_splits):
+        if fold % 2 == 0:  # Progress indicator
+            print(f"  Processing fold {fold + 1}/{cv_folds}...")
+        
+        # Split data for this fold
+        X_train_fold = real_features.iloc[train_idx]
+        X_test_fold = real_features.iloc[test_idx]
+        
+        if use_true_labels:
+            y_test_fold = real_labels.iloc[test_idx]
+        
+        # Scale data for this fold
+        scaler_fold = StandardScaler()
+        X_train_scaled = scaler_fold.fit_transform(X_train_fold)
+        X_test_scaled = scaler_fold.transform(X_test_fold)
+        
+        # Scale synthetic data with this fold's scaler
+        raw_syn_scaled_fold = scaler_fold.transform(raw_syn_features)
+        refined_syn_scaled_fold = scaler_fold.transform(refined_syn_features)
+        
+        # Fit clustering models
+        kmeans_real_fold = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
+        kmeans_real_fold.fit(X_train_scaled)
+        
+        kmeans_raw_fold = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
+        kmeans_raw_fold.fit(raw_syn_scaled_fold)
+        
+        kmeans_refined_fold = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
+        kmeans_refined_fold.fit(refined_syn_scaled_fold)
+        
+        # Predict on test set
+        real_pred_fold = kmeans_real_fold.predict(X_test_scaled)
+        raw_pred_fold = kmeans_raw_fold.predict(X_test_scaled)
+        refined_pred_fold = kmeans_refined_fold.predict(X_test_scaled)
+        
+        # Determine reference labels for this fold
+        if use_true_labels:
+            ref_labels_fold = y_test_fold
+        else:
+            ref_labels_fold = real_pred_fold
+        
+        # Calculate metrics
+        cv_results['real_ari'].append(adjusted_rand_score(ref_labels_fold, real_pred_fold))
+        cv_results['real_ami'].append(adjusted_mutual_info_score(ref_labels_fold, real_pred_fold))
+        
+        cv_results['raw_ari'].append(adjusted_rand_score(ref_labels_fold, raw_pred_fold))
+        cv_results['raw_ami'].append(adjusted_mutual_info_score(ref_labels_fold, raw_pred_fold))
+        
+        cv_results['refined_ari'].append(adjusted_rand_score(ref_labels_fold, refined_pred_fold))
+        cv_results['refined_ami'].append(adjusted_mutual_info_score(ref_labels_fold, refined_pred_fold))
+    
+    # Calculate CV statistics
+    cv_stats = {}
+    for metric in cv_results:
+        cv_stats[metric] = {
+            'mean': np.mean(cv_results[metric]),
+            'std': np.std(cv_results[metric], ddof=1),
+            'values': cv_results[metric]
+        }
+    
+    results['clustering_agreement_cv'] = cv_stats
+    
+    # 4. Cluster Quality Metrics (on test set from single split)
+    real_silhouette = silhouette_score(real_test_scaled, real_test_pred)
     
     # For synthetic models, evaluate silhouette on their own test portions
     raw_test_size = min(len(raw_syn_scaled), len(real_test_scaled))
@@ -1048,25 +1206,65 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
         'refined_synthetic': refined_silhouette
     }
     
-    # Print summary
-    print(f"\n{'='*60}")
+    # Print comprehensive summary
+    print(f"\n{'='*80}")
     print("CLUSTERING EVALUATION RESULTS")
-    print('='*60)
+    print('='*80)
     
-    print(f"{'Metric':<30} {'Raw Synthetic':<20} {'Refined Synthetic':<20}")
-    print("-" * 70)
-    print(f"{'Adjusted Rand Index':<30} {raw_ari:<20.4f} {refined_ari:<20.4f}")
-    print(f"{'Adjusted Mutual Info':<30} {raw_ami:<20.4f} {refined_ami:<20.4f}")
-    print(f"{'Silhouette Score':<30} {raw_silhouette:<20.4f} {refined_silhouette:<20.4f}")
+    label_type = "true labels" if use_true_labels else "real clustering predictions"
     
-    print(f"\nReference silhouette score (real test): {real_silhouette:.4f}")
+    print(f"\nSINGLE TRAIN/TEST SPLIT RESULTS:")
+    print(f"{'Metric':<25} {'Real':<15} {'Raw Synthetic':<15} {'Refined Synthetic':<15}")
+    print("-" * 75)
+    print(f"{'ARI (vs ' + label_type + ')':<25} {real_ari:<15.4f} {raw_ari:<15.4f} {refined_ari:<15.4f}")
+    print(f"{'AMI (vs ' + label_type + ')':<25} {real_ami:<15.4f} {raw_ami:<15.4f} {refined_ami:<15.4f}")
+    print(f"{'Silhouette Score':<25} {real_silhouette:<15.4f} {raw_silhouette:<15.4f} {refined_silhouette:<15.4f}")
+    
+    print(f"\n{cv_folds}-FOLD CROSS-VALIDATION RESULTS (Mean ± Std):")
+    print(f"{'Metric':<25} {'Real':<20} {'Raw Synthetic':<20} {'Refined Synthetic':<20}")
+    print("-" * 90)
+    
+    real_ari_cv = f"{cv_stats['real_ari']['mean']:.4f} ± {cv_stats['real_ari']['std']:.4f}"
+    raw_ari_cv = f"{cv_stats['raw_ari']['mean']:.4f} ± {cv_stats['raw_ari']['std']:.4f}"
+    refined_ari_cv = f"{cv_stats['refined_ari']['mean']:.4f} ± {cv_stats['refined_ari']['std']:.4f}"
+    
+    real_ami_cv = f"{cv_stats['real_ami']['mean']:.4f} ± {cv_stats['real_ami']['std']:.4f}"
+    raw_ami_cv = f"{cv_stats['raw_ami']['mean']:.4f} ± {cv_stats['raw_ami']['std']:.4f}"
+    refined_ami_cv = f"{cv_stats['refined_ami']['mean']:.4f} ± {cv_stats['refined_ami']['std']:.4f}"
+    
+    print(f"{'ARI (vs ' + label_type + ')':<25} {real_ari_cv:<20} {raw_ari_cv:<20} {refined_ari_cv:<20}")
+    print(f"{'AMI (vs ' + label_type + ')':<25} {real_ami_cv:<20} {raw_ami_cv:<20} {refined_ami_cv:<20}")
+    
+    # Calculate improvements
+    ari_improvement = cv_stats['refined_ari']['mean'] - cv_stats['raw_ari']['mean']
+    ami_improvement = cv_stats['refined_ami']['mean'] - cv_stats['raw_ami']['mean']
+    
+    print(f"\nIMPROVEMENT FROM C-MAPS REFINEMENT:")
+    print(f"ARI improvement: {ari_improvement:+.4f}")
+    print(f"AMI improvement: {ami_improvement:+.4f}")
+    
+    # Statistical significance test (if you want to add)
+    from scipy import stats
+    if cv_folds >= 3:
+        ari_ttest = stats.ttest_rel(cv_stats['refined_ari']['values'], cv_stats['raw_ari']['values'])
+        ami_ttest = stats.ttest_rel(cv_stats['refined_ami']['values'], cv_stats['raw_ami']['values'])
+        
+        print(f"\nSTATISTICAL SIGNIFICANCE (paired t-test):")
+        print(f"ARI improvement p-value: {ari_ttest.pvalue:.4f}")
+        print(f"AMI improvement p-value: {ami_ttest.pvalue:.4f}")
+    
+    # Store configuration info in results
+    results['config'] = {
+        'use_true_labels': use_true_labels,
+        'target_column': target_column,
+        'label_type': label_type
+    }
     
     return results
 
-
 def plot_clustering_results(results):
     """
-    Visualize corrected clustering evaluation results.
+    Visualize corrected clustering evaluation results with error bars.
     """
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
@@ -1094,33 +1292,56 @@ def plot_clustering_results(results):
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
     
-    # 3. Clustering Agreement Metrics (fixed)
+    # 3. Clustering Agreement Metrics with Error Bars (FROM CV RESULTS)
+    cv_stats = results['clustering_agreement_cv']
+    label_type = results['config']['label_type']
+    
     metrics = ['ARI', 'AMI']
-    raw_values = [
-        results['clustering_agreement']['raw_synthetic']['ari'],
-        results['clustering_agreement']['raw_synthetic']['ami']
-    ]
-    refined_values = [
-        results['clustering_agreement']['refined_synthetic']['ari'],
-        results['clustering_agreement']['refined_synthetic']['ami']
-    ]
+    
+    # Get CV means and stds
+    real_means = [cv_stats['real_ari']['mean'], cv_stats['real_ami']['mean']]
+    real_stds = [cv_stats['real_ari']['std'], cv_stats['real_ami']['std']]
+    
+    raw_means = [cv_stats['raw_ari']['mean'], cv_stats['raw_ami']['mean']]
+    raw_stds = [cv_stats['raw_ari']['std'], cv_stats['raw_ami']['std']]
+    
+    refined_means = [cv_stats['refined_ari']['mean'], cv_stats['refined_ami']['mean']]
+    refined_stds = [cv_stats['refined_ari']['std'], cv_stats['refined_ami']['std']]
     
     x = np.arange(len(metrics))
-    width = 0.35
+    width = 0.25
     
-    axes[1, 0].bar(x - width/2, raw_values, width, label='Raw Synthetic', 
-                   color='#ff7f7f', alpha=0.7)
-    axes[1, 0].bar(x + width/2, refined_values, width, label='Refined Synthetic', 
-                   color='#7fbf7f', alpha=0.7)
-    axes[1, 0].set_ylabel('Score')
-    axes[1, 0].set_title('Clustering Agreement with Real Data')
+    # Plot bars with error bars
+    axes[1, 0].bar(x - width, real_means, width, yerr=real_stds, 
+                   label='Real', color='#7f7fff', alpha=0.7, capsize=5)
+    axes[1, 0].bar(x, raw_means, width, yerr=raw_stds,
+                   label='Raw Synthetic', color='#ff7f7f', alpha=0.7, capsize=5)
+    axes[1, 0].bar(x + width, refined_means, width, yerr=refined_stds,
+                   label='Refined Synthetic', color='#7fbf7f', alpha=0.7, capsize=5)
+    
+    axes[1, 0].set_ylabel('Score (Mean ± Std)')
+    axes[1, 0].set_title(f'Clustering Agreement (vs {label_type})')
     axes[1, 0].set_xticks(x)
     axes[1, 0].set_xticklabels(metrics)
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
-    axes[1, 0].set_ylim(0, 1)
+    axes[1, 0].set_ylim(0, min(1.0, max(max(real_means), max(raw_means), max(refined_means)) * 1.2))
     
-    # 4. Silhouette Score Comparison (separate plot)
+    # Add value labels on bars (mean ± std)
+    for i, (metric_name, real_m, real_s, raw_m, raw_s, ref_m, ref_s) in enumerate(
+        zip(metrics, real_means, real_stds, raw_means, raw_stds, refined_means, refined_stds)):
+        
+        # Real values
+        axes[1, 0].text(i - width, real_m + real_s + 0.01, f'{real_m:.3f}±{real_s:.3f}', 
+                       ha='center', va='bottom', fontsize=8, rotation=0)
+        # Raw values  
+        axes[1, 0].text(i, raw_m + raw_s + 0.01, f'{raw_m:.3f}±{raw_s:.3f}', 
+                       ha='center', va='bottom', fontsize=8, rotation=0)
+        # Refined values
+        axes[1, 0].text(i + width, ref_m + ref_s + 0.01, f'{ref_m:.3f}±{ref_s:.3f}', 
+                       ha='center', va='bottom', fontsize=8, rotation=0)
+    
+    # 4. Silhouette Score Comparison (separate plot, no error bars as it's single split)
     sil_scores = [
         results['cluster_quality']['real'],
         results['cluster_quality']['raw_synthetic'],
@@ -1141,3 +1362,40 @@ def plot_clustering_results(results):
     
     plt.tight_layout()
     plt.show()
+    
+    # Print summary of improvements with statistical significance
+    print("\n" + "="*60)
+    print("CLUSTERING IMPROVEMENT SUMMARY")
+    print("="*60)
+    
+    ari_improvement = refined_means[0] - raw_means[0]
+    ami_improvement = refined_means[1] - raw_means[1]
+    
+    print(f"ARI improvement: {ari_improvement:+.4f} ({ari_improvement/raw_means[0]*100:+.1f}%)")
+    print(f"AMI improvement: {ami_improvement:+.4f} ({ami_improvement/raw_means[1]*100:+.1f}%)")
+    
+    # Effect size (Cohen's d)
+    ari_pooled_std = np.sqrt((raw_stds[0]**2 + refined_stds[0]**2) / 2)
+    ami_pooled_std = np.sqrt((raw_stds[1]**2 + refined_stds[1]**2) / 2)
+    
+    ari_effect_size = ari_improvement / ari_pooled_std if ari_pooled_std > 0 else 0
+    ami_effect_size = ami_improvement / ami_pooled_std if ami_pooled_std > 0 else 0
+    
+    print(f"ARI effect size (Cohen's d): {ari_effect_size:.3f}")
+    print(f"AMI effect size (Cohen's d): {ami_effect_size:.3f}")
+    
+    if 'clustering_agreement_cv' in results:
+        from scipy import stats
+        if len(results['clustering_agreement_cv']['refined_ari']['values']) >= 3:
+            ari_ttest = stats.ttest_rel(
+                results['clustering_agreement_cv']['refined_ari']['values'], 
+                results['clustering_agreement_cv']['raw_ari']['values']
+            )
+            ami_ttest = stats.ttest_rel(
+                results['clustering_agreement_cv']['refined_ami']['values'], 
+                results['clustering_agreement_cv']['raw_ami']['values']
+            )
+            
+            print(f"\nStatistical significance (paired t-test):")
+            print(f"ARI p-value: {ari_ttest.pvalue:.4f} {'(significant)' if ari_ttest.pvalue < 0.05 else '(not significant)'}")
+            print(f"AMI p-value: {ami_ttest.pvalue:.4f} {'(significant)' if ami_ttest.pvalue < 0.05 else '(not significant)'}")
