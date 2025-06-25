@@ -4,9 +4,18 @@ from scipy import stats
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import entropy, ks_2samp, chisquare
 from sklearn.metrics import pairwise
+from sklearn.preprocessing import MinMaxScaler
 from typing import Dict, List, Tuple, Any, Optional
 import warnings
 warnings.filterwarnings('ignore')
+
+try:
+    from geomloss import SamplesLoss
+    import torch
+    GEOMLOSS_AVAILABLE = True
+except ImportError:
+    GEOMLOSS_AVAILABLE = False
+    warnings.warn("geomloss not available. Install with: pip install geomloss")
 
 
 def identify_column_types(df: pd.DataFrame, 
@@ -126,11 +135,11 @@ def get_frequency_with_discretization(df_real: pd.DataFrame, df_syn: pd.DataFram
     return freqs
 
 
-def compute_jensen_shannon_distance(df_real: pd.DataFrame, df_syn: pd.DataFrame, 
-                                   discretize_numerical: bool = False,
-                                   n_histogram_bins: int = 50) -> float:
+def compute_jensen_shannon_distance_marginal(df_real: pd.DataFrame, df_syn: pd.DataFrame, 
+                                           discretize_numerical: bool = False,
+                                           n_histogram_bins: int = 50) -> float:
     """
-    Compute Jensen-Shannon distance per column and return mean.
+    Compute Jensen-Shannon distance per column (marginal) and return mean.
     Only works on categorical columns unless discretize_numerical=True.
     """
     try:
@@ -159,13 +168,65 @@ def compute_jensen_shannon_distance(df_real: pd.DataFrame, df_syn: pd.DataFrame,
         return np.mean(res) if res else np.nan
         
     except Exception as e:
-        print(f"Error computing Jensen-Shannon distance: {e}")
+        print(f"Error computing marginal Jensen-Shannon distance: {e}")
+        return np.nan
+
+
+def compute_js_distance_joint_categorical(df_real: pd.DataFrame, df_syn: pd.DataFrame) -> float:
+    """
+    Computes the Jensen-Shannon distance on the joint distribution of all
+    categorical columns.
+
+    This provides a single score that measures the similarity of the relationships
+    between all categorical variables.
+    """
+    try:
+        # 1. Identify all categorical columns
+        # (Assuming you have a way to identify them, otherwise use select_dtypes)
+        categorical_cols = df_real.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        # Also check for numeric columns that might be categorical based on unique values
+        _, identified_categorical_cols = identify_column_types(df_real)
+        categorical_cols.extend(identified_categorical_cols)
+        categorical_cols = list(set(categorical_cols))  # Remove duplicates
+        
+        if len(categorical_cols) < 1:
+            print("Warning: No categorical columns found for joint distribution. Returning NaN.")
+            return np.nan
+
+        print(f"Computing joint JS distance for categorical columns: {categorical_cols}")
+
+        # 2. Create the interaction variable for both dataframes
+        # We use apply with tuple to create a hashable key for each row
+        real_joint_dist = df_real[categorical_cols].apply(tuple, axis=1).value_counts()
+        syn_joint_dist = df_syn[categorical_cols].apply(tuple, axis=1).value_counts()
+
+        # 3. Align the frequency tables
+        # Get the union of all unique joint categories
+        all_categories = sorted(list(set(real_joint_dist.index) | set(syn_joint_dist.index)))
+        
+        # Reindex both series to have the same categories, filling missing ones with 0
+        real_freq = real_joint_dist.reindex(all_categories, fill_value=0)
+        syn_freq = syn_joint_dist.reindex(all_categories, fill_value=0)
+
+        # 4. Normalize to get probability distributions
+        real_prob = real_freq / real_freq.sum()
+        syn_prob = syn_freq / syn_freq.sum()
+
+        # 5. Compute the Jensen-Shannon distance
+        # The result is bounded [0, 1] when using base 2 logarithm.
+        js_dist = jensenshannon(real_prob, syn_prob, base=2)
+        
+        return js_dist if not np.isnan(js_dist) else np.nan
+
+    except Exception as e:
+        print(f"Error computing joint Jensen-Shannon distance: {e}")
         return np.nan
 
 
 def compute_ks_statistic(df_real: pd.DataFrame, df_syn: pd.DataFrame) -> float:
     """
-    Compute KS statistic per column and return mean (1 - statistic for better interpretation).
+    Compute KS statistic per column (marginal) and return mean (1 - statistic for better interpretation).
     """
     try:
         res = []
@@ -186,32 +247,85 @@ def compute_ks_statistic(df_real: pd.DataFrame, df_syn: pd.DataFrame) -> float:
         return np.nan
 
 
-def compute_wasserstein_distance(df_real: pd.DataFrame, df_syn: pd.DataFrame) -> float:
+def compute_wasserstein_distance_joint(df_real: pd.DataFrame, df_syn: pd.DataFrame, 
+                                     max_samples: int = 5000, random_state: int = 42) -> float:
     """
-    Compute Wasserstein distance per column and return mean.
+    Compute joint Wasserstein distance using optimal transport on all numerical columns.
+    Uses geomloss library for efficient computation.
+    
+    Args:
+        df_real: Real data DataFrame
+        df_syn: Synthetic data DataFrame
+        max_samples: Maximum number of samples to use for computation (for efficiency)
+        random_state: Random seed for reproducibility
+        
+    Returns:
+        Joint Wasserstein distance
     """
     try:
-        res = []
+        if not GEOMLOSS_AVAILABLE:
+            print("Error: geomloss not available. Install with: pip install geomloss")
+            return np.nan
         
-        for col in df_real.columns:
-            if col in df_syn.columns:
-                real_col = df_real[col].dropna()
-                syn_col = df_syn[col].dropna()
-                
-                if len(real_col) > 0 and len(syn_col) > 0:
-                    wd = stats.wasserstein_distance(real_col, syn_col)
-                    res.append(wd)
+        # Get only numerical data
+        numerical_columns = df_real.select_dtypes(include=[np.number]).columns.tolist()
+        if not numerical_columns:
+            print("Warning: No numerical columns found for Wasserstein distance computation.")
+            return np.nan
         
-        return np.mean(res) if res else np.nan
+        real_data_numerical = df_real[numerical_columns].copy()
+        syn_data_numerical = df_syn[numerical_columns].copy()
+        
+        # Handle NaN values
+        real_data_numerical = real_data_numerical.fillna(0)
+        syn_data_numerical = syn_data_numerical.fillna(0)
+        
+        # Apply MinMaxScaler to the numerical data
+        scaler = MinMaxScaler().fit(real_data_numerical)
+        real_data_numerical_scaled = pd.DataFrame(
+            scaler.transform(real_data_numerical), 
+            columns=numerical_columns
+        )
+        syn_data_numerical_scaled = pd.DataFrame(
+            scaler.transform(syn_data_numerical), 
+            columns=numerical_columns
+        )
+        
+        # Convert to tensors
+        real_data_tensor = torch.tensor(real_data_numerical_scaled.values, dtype=torch.float32)
+        syn_data_tensor = torch.tensor(syn_data_numerical_scaled.values, dtype=torch.float32)
+        
+        # Randomly subsample for faster computation if datasets are large
+        np.random.seed(random_state)
+        n_real = real_data_tensor.shape[0]
+        n_syn = syn_data_tensor.shape[0]
+        
+        if n_real > max_samples:
+            real_idx = np.random.choice(n_real, size=max_samples, replace=False)
+            real_data_subset = real_data_tensor[real_idx]
+        else:
+            real_data_subset = real_data_tensor
+            
+        if n_syn > max_samples:
+            syn_idx = np.random.choice(n_syn, size=max_samples, replace=False)
+            syn_data_subset = syn_data_tensor[syn_idx]
+        else:
+            syn_data_subset = syn_data_tensor
+        
+        # Compute Wasserstein distance using optimal transport
+        OT_solver = SamplesLoss(loss="sinkhorn")
+        wd_distance = OT_solver(real_data_subset, syn_data_subset).cpu().numpy().item()
+        
+        return wd_distance
         
     except Exception as e:
-        print(f"Error computing Wasserstein distance: {e}")
+        print(f"Error computing joint Wasserstein distance: {e}")
         return np.nan
 
 
 def compute_mmd(df_real: pd.DataFrame, df_syn: pd.DataFrame, kernel: str = "rbf") -> float:
     """
-    Compute Maximum Mean Discrepancy with configurable kernels (column-wise joint computation).
+    Compute Maximum Mean Discrepancy with configurable kernels (joint computation on all numerical columns).
     """
     try:
         # Only use numeric columns and handle NaN values
@@ -266,7 +380,7 @@ def compute_inverse_kl_divergence(df_real: pd.DataFrame, df_syn: pd.DataFrame,
                                  discretize_numerical: bool = False,
                                  n_histogram_bins: int = 50) -> float:
     """
-    Compute inverse KL divergence per column and return mean.
+    Compute inverse KL divergence per column (marginal) and return mean.
     Only works on categorical columns unless discretize_numerical=True.
     """
     try:
@@ -303,7 +417,7 @@ def compute_chi_squared_test(df_real: pd.DataFrame, df_syn: pd.DataFrame,
                             discretize_numerical: bool = False,
                             n_histogram_bins: int = 50) -> float:
     """
-    Compute Chi-squared test p-value per column and return mean.
+    Compute Chi-squared test p-value per column (marginal) and return mean.
     Only works on categorical columns unless discretize_numerical=True.
     """
     try:
@@ -340,7 +454,7 @@ def compute_total_variation_distance(df_real: pd.DataFrame, df_syn: pd.DataFrame
                                    discretize_numerical: bool = False,
                                    n_histogram_bins: int = 50) -> float:
     """
-    Compute Total Variation Distance per column and return mean.
+    Compute Total Variation Distance per column (marginal) and return mean.
     Only works on categorical columns unless discretize_numerical=True.
     """
     try:
@@ -376,7 +490,7 @@ def compute_hellinger_distance(df_real: pd.DataFrame, df_syn: pd.DataFrame,
                               discretize_numerical: bool = False,
                               n_histogram_bins: int = 50) -> float:
     """
-    Compute Hellinger Distance per column and return mean.
+    Compute Hellinger Distance per column (marginal) and return mean.
     Only works on categorical columns unless discretize_numerical=True.
     """
     try:
@@ -415,6 +529,8 @@ def evaluate_distribution_similarity(real_data: pd.DataFrame,
                                    mmd_kernel: str = "rbf",
                                    discretize_numerical: bool = False,
                                    n_histogram_bins: int = 50,
+                                   max_samples_wd: int = 5000,
+                                   random_state: int = 42,
                                    verbose: bool = True) -> pd.DataFrame:
     """
     Comprehensive evaluation of distribution similarity between real and synthetic datasets.
@@ -424,12 +540,14 @@ def evaluate_distribution_similarity(real_data: pd.DataFrame,
         raw_synthetic_data: Raw synthetic dataset (before refinement)
         refined_synthetic_data: Refined synthetic dataset (after C-MAPS)
         metrics: List of metrics to compute. If None, compute all available metrics.
-                Available metrics: ["jensen_shannon_distance", "inverse_kl_divergence", 
-                "chi_squared_test", "total_variation_distance", "ks_test", 
-                "wasserstein_distance", "maximum_mean_discrepancy", "hellinger_distance"]
+                Available metrics: ["jensen_shannon_distance_marginal", "jensen_shannon_distance_joint_categorical",
+                "inverse_kl_divergence", "chi_squared_test", "total_variation_distance", "ks_test", 
+                "wasserstein_distance_joint", "maximum_mean_discrepancy", "hellinger_distance"]
         mmd_kernel: Kernel for MMD computation ("rbf", "linear", "polynomial")
         discretize_numerical: Whether to discretize numerical variables for categorical metrics
         n_histogram_bins: Number of bins for histogram-based metrics
+        max_samples_wd: Maximum samples for Wasserstein distance computation (for efficiency)
+        random_state: Random seed for reproducibility
         verbose: Whether to print progress
         
     Returns:
@@ -465,58 +583,74 @@ def evaluate_distribution_similarity(real_data: pd.DataFrame,
     
     # Define all available metrics
     all_metrics = {
-        "jensen_shannon_distance": {
-            "name": "Jensen-Shannon Distance",
+        "jensen_shannon_distance_marginal": {
+            "name": "Jensen-Shannon Distance (Marginal)",
             "data_type": "Categorical" if not discretize_numerical else "All",
-            "func": lambda df_r, df_s: compute_jensen_shannon_distance(df_r, df_s, discretize_numerical, n_histogram_bins),
+            "distribution_type": "Marginal",
+            "func": lambda df_r, df_s: compute_jensen_shannon_distance_marginal(df_r, df_s, discretize_numerical, n_histogram_bins),
+            "direction": "minimize",
+            "description": "Lower is better"
+        },
+        "jensen_shannon_distance_joint_categorical": {
+            "name": "Jensen-Shannon Distance (Joint Categorical)",
+            "data_type": "Categorical",
+            "distribution_type": "Joint",
+            "func": lambda df_r, df_s: compute_js_distance_joint_categorical(df_r, df_s),
             "direction": "minimize",
             "description": "Lower is better"
         },
         "inverse_kl_divergence": {
-            "name": "Inverse KL Divergence",
+            "name": "Inverse KL Divergence (Marginal)",
             "data_type": "Categorical" if not discretize_numerical else "All", 
+            "distribution_type": "Marginal",
             "func": lambda df_r, df_s: compute_inverse_kl_divergence(df_r, df_s, discretize_numerical, n_histogram_bins),
             "direction": "maximize",
             "description": "Higher is better"
         },
         "chi_squared_test": {
-            "name": "Chi-squared Test p-value",
+            "name": "Chi-squared Test p-value (Marginal)",
             "data_type": "Categorical" if not discretize_numerical else "All",
+            "distribution_type": "Marginal",
             "func": lambda df_r, df_s: compute_chi_squared_test(df_r, df_s, discretize_numerical, n_histogram_bins),
             "direction": "maximize", 
             "description": "Higher is better"
         },
         "total_variation_distance": {
-            "name": "Total Variation Distance",
+            "name": "Total Variation Distance (Marginal)",
             "data_type": "Categorical" if not discretize_numerical else "All",
+            "distribution_type": "Marginal",
             "func": lambda df_r, df_s: compute_total_variation_distance(df_r, df_s, discretize_numerical, n_histogram_bins),
             "direction": "minimize",
             "description": "Lower is better"
         },
         "ks_test": {
-            "name": "Kolmogorov-Smirnov Test",
+            "name": "Kolmogorov-Smirnov Test (Marginal)",
             "data_type": "Numerical",
+            "distribution_type": "Marginal",
             "func": lambda df_r, df_s: compute_ks_statistic(df_r[numerical_cols], df_s[numerical_cols]) if numerical_cols else np.nan,
             "direction": "maximize",
             "description": "Higher is better"
         },
-        "wasserstein_distance": {
-            "name": "Wasserstein Distance",
+        "wasserstein_distance_joint": {
+            "name": "Wasserstein Distance (Joint)",
             "data_type": "Numerical",
-            "func": lambda df_r, df_s: compute_wasserstein_distance(df_r[numerical_cols], df_s[numerical_cols]) if numerical_cols else np.nan,
+            "distribution_type": "Joint",
+            "func": lambda df_r, df_s: compute_wasserstein_distance_joint(df_r, df_s, max_samples_wd, random_state),
             "direction": "minimize",
             "description": "Lower is better"
         },
         "maximum_mean_discrepancy": {
-            "name": f"Maximum Mean Discrepancy ({mmd_kernel})",
+            "name": f"Maximum Mean Discrepancy (Joint, {mmd_kernel})",
             "data_type": "Numerical",
+            "distribution_type": "Joint",
             "func": lambda df_r, df_s: compute_mmd(df_r, df_s, mmd_kernel),
             "direction": "minimize", 
             "description": "Lower is better"
         },
         "hellinger_distance": {
-            "name": "Hellinger Distance",
+            "name": "Hellinger Distance (Marginal)",
             "data_type": "Categorical" if not discretize_numerical else "All",
+            "distribution_type": "Marginal",
             "func": lambda df_r, df_s: compute_hellinger_distance(df_r, df_s, discretize_numerical, n_histogram_bins),
             "direction": "minimize",
             "description": "Lower is better"
@@ -568,6 +702,7 @@ def evaluate_distribution_similarity(real_data: pd.DataFrame,
             results.append({
                 "Metric": metric_info['name'],
                 "Data Type": metric_info['data_type'],
+                "Distribution Type": metric_info['distribution_type'],
                 "Raw Synthetic": f"{raw_score:.6f}",
                 "Refined Synthetic": f"{refined_score:.6f}",
                 "Improvement": improvement,
@@ -595,10 +730,24 @@ def evaluate_distribution_similarity(real_data: pd.DataFrame,
             # Summary statistics
             total_metrics = len(results_df)
             improved_metrics = len(results_df[results_df['Improvement'] == '✓'])
+            marginal_metrics = len(results_df[results_df['Distribution Type'] == 'Marginal'])
+            joint_metrics = len(results_df[results_df['Distribution Type'] == 'Joint'])
+            marginal_improved = len(results_df[(results_df['Distribution Type'] == 'Marginal') & 
+                                             (results_df['Improvement'] == '✓')])
+            joint_improved = len(results_df[(results_df['Distribution Type'] == 'Joint') & 
+                                          (results_df['Improvement'] == '✓')])
             
             print(f"\nOVERALL SUMMARY:")
             print(f"Total metrics computed: {total_metrics}")
             print(f"Metrics improved by refinement: {improved_metrics}/{total_metrics} ({improved_metrics/total_metrics*100:.1f}%)")
+            print(f"\nMARGINAL vs JOINT BREAKDOWN:")
+            
+            # Calculate percentages safely
+            marginal_pct = (marginal_improved/marginal_metrics*100) if marginal_metrics > 0 else 0
+            joint_pct = (joint_improved/joint_metrics*100) if joint_metrics > 0 else 0
+            
+            print(f"Marginal metrics: {marginal_improved}/{marginal_metrics} improved ({marginal_pct:.1f}%)")
+            print(f"Joint metrics: {joint_improved}/{joint_metrics} improved ({joint_pct:.1f}%)")
         else:
             print("No metrics could be computed successfully.")
     
