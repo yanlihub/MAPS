@@ -437,13 +437,41 @@ def mixed_correlation_analysis(
     
     print("-"*65)
     
+    # NEW FEATURE: DETAILED BREAKDOWN BY CORRELATION TYPE
+    print("\nDETAILED BREAKDOWN BY CORRELATION TYPE:")
+    print("-"*45)
+    
+    # Check which correlation types are available and display them
+    correlation_breakdown = {}
+    
+    if 'num_num_mae' in scores_raw and 'num_num_mae' in scores_refined:
+        raw_score = scores_raw['num_num_mae']
+        refined_score = scores_refined['num_num_mae']
+        improvement = ((raw_score - refined_score) / raw_score * 100) if raw_score > 0 else 0
+        correlation_breakdown['num_num'] = improvement
+        print(f"Num-Num : {raw_score:.4f} → {refined_score:.4f} ({improvement:+.1f}%)")
+    
+    if 'cat_cat_mae' in scores_raw and 'cat_cat_mae' in scores_refined:
+        raw_score = scores_raw['cat_cat_mae']
+        refined_score = scores_refined['cat_cat_mae']
+        improvement = ((raw_score - refined_score) / raw_score * 100) if raw_score > 0 else 0
+        correlation_breakdown['cat_cat'] = improvement
+        print(f"Cat-Cat : {raw_score:.4f} → {refined_score:.4f} ({improvement:+.1f}%)")
+    
+    if 'cat_num_mae' in scores_raw and 'cat_num_mae' in scores_refined:
+        raw_score = scores_raw['cat_num_mae']
+        refined_score = scores_refined['cat_num_mae']
+        improvement = ((raw_score - refined_score) / raw_score * 100) if raw_score > 0 else 0
+        correlation_breakdown['cat_num'] = improvement
+        print(f"Cat-Num : {raw_score:.4f} → {refined_score:.4f} ({improvement:+.1f}%)")
+    
     # CONSENSUS ASSESSMENT
     improvements = list(improvement_summary.values())
     if len(improvements) > 0:
         avg_improvement = np.mean(improvements)
         improvement_std = np.std(improvements)
         
-        print(f"CONSENSUS ASSESSMENT:")
+        print(f"\nCONSENSUS ASSESSMENT:")
         print(f"Average improvement across metrics: {avg_improvement:+.1f}% ± {improvement_std:.1f}%")
     
     # PLOTTING
@@ -491,6 +519,7 @@ def mixed_correlation_analysis(
             'raw_synthetic': scores_raw,
             'refined_synthetic': scores_refined,
             'improvement_summary': improvement_summary,
+            'correlation_breakdown': correlation_breakdown,  # NEW: Added breakdown to results
             'consensus_improvement': np.mean(improvements) if improvements else None,
             'consensus_std': np.std(improvements) if improvements else None
         },
