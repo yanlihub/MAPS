@@ -76,6 +76,9 @@ class FidelityClassifier:
         # Flag to track if preprocessor is fitted
         self.preprocessor_fitted = False
         
+        # Store use_embedding setting for consistency
+        self.use_embedding = True
+        
         self.is_fitted = False
         
     def fit(self,
@@ -92,7 +95,8 @@ class FidelityClassifier:
             # Classifier parameters
             classifier_test_size: float = 0.2,
             mlp_hidden_layer_sizes: Tuple[int, ...] = (120, 60),
-            show_calibration_plot: bool = True) -> Tuple[float, float]:
+            show_calibration_plot: bool = True,
+            use_embedding: bool = True) -> Tuple[float, float]:
         """
         Fit the complete fidelity classification pipeline.
         
@@ -109,6 +113,7 @@ class FidelityClassifier:
             classifier_test_size: Test size for classifier evaluation
             mlp_hidden_layer_sizes: Hidden layer sizes for MLP classifier
             show_calibration_plot: Whether to show calibration plot
+            use_embedding: Whether to use embeddings for classifier training (default: True)
             
         Returns:
             Tuple of (classifier_accuracy, classifier_roc_auc)
@@ -117,6 +122,9 @@ class FidelityClassifier:
             Users should provide a separate synthetic dataset for importance weight estimation
             using estimate_importance_weights() to avoid data leakage.
         """
+        # Store use_embedding setting
+        self.use_embedding = use_embedding
+        
         if self.verbose:
             print("=" * 60)
             print("STARTING C-MAPS FIDELITY CLASSIFIER TRAINING")
@@ -125,6 +133,7 @@ class FidelityClassifier:
             print(f"Synthetic data for training: {synthetic_data_for_training.shape}")
             if synthetic_data_pool is not None:
                 print(f"Full synthetic data pool: {synthetic_data_pool.shape}")
+            print(f"Using embeddings for classifier: {use_embedding}")
         
         # Store original data for consistent preprocessing
         self.original_real_data = real_data.copy()
@@ -151,7 +160,7 @@ class FidelityClassifier:
         
         # Now transform the specific datasets we need
         if self.verbose:
-            print("\n2. TRANSFORMING DATA FOR AUTOENCODER")
+            print("\n2. TRANSFORMING DATA")
             print("-" * 40)
         
         # Transform real data
@@ -165,56 +174,79 @@ class FidelityClassifier:
             print(f"Processed synthetic training data shape: {self.processed_synthetic_training_df.shape}")
             print("Note: Shapes should have same number of columns now")
         
-        # Step 3: Train autoencoder and get embeddings
-        if self.verbose:
-            print("\n3. TRAINING AUTOENCODER FOR FEATURE EXTRACTION")
-            print("-" * 40)
-        
-        # Adjust embedding dimension based on data complexity
-        adjusted_embedding_dim = min(self.embedding_dim, 
-                                   max(8, self.processed_real_df.shape[1] // 3))
-        
-        self.autoencoder_trainer = TabularAutoencoderTrainer(
-            input_dim=self.processed_real_df.shape[1],
-            embedding_dim=adjusted_embedding_dim,
-            hidden_dims=autoencoder_hidden_dims,
-            verbose=self.verbose
-        )
-        
-        # Adjust batch size based on data size
-        adjusted_batch_size = min(autoencoder_batch_size, len(self.processed_real_df))
-        
-        self.real_embeddings, self.synthetic_training_embeddings = self.autoencoder_trainer.train(
-            real_data=self.processed_real_df,
-            synthetic_data=self.processed_synthetic_training_df if use_synthetic_for_autoencoder else None,
-            epochs=autoencoder_epochs,
-            batch_size=adjusted_batch_size,
-            learning_rate=autoencoder_lr,
-            weight_decay=autoencoder_weight_decay,
-            use_synthetic_for_training=use_synthetic_for_autoencoder
-        )
-        
-        # If not using synthetic data for training, get synthetic embeddings separately
-        if not use_synthetic_for_autoencoder:
-            self.synthetic_training_embeddings = self.autoencoder_trainer.get_embeddings(self.processed_synthetic_training_df)
-        
-        if self.verbose:
-            print(f"Generated embeddings - Real: {self.real_embeddings.shape}, Synthetic training: {self.synthetic_training_embeddings.shape}")
+        # Step 3: Train autoencoder and get embeddings (only if use_embedding is True)
+        if use_embedding:
+            if self.verbose:
+                print("\n3. TRAINING AUTOENCODER FOR FEATURE EXTRACTION")
+                print("-" * 40)
+            
+            # Adjust embedding dimension based on data complexity
+            adjusted_embedding_dim = min(self.embedding_dim, 
+                                       max(8, self.processed_real_df.shape[1] // 3))
+            
+            self.autoencoder_trainer = TabularAutoencoderTrainer(
+                input_dim=self.processed_real_df.shape[1],
+                embedding_dim=adjusted_embedding_dim,
+                hidden_dims=autoencoder_hidden_dims,
+                verbose=self.verbose
+            )
+            
+            # Adjust batch size based on data size
+            adjusted_batch_size = min(autoencoder_batch_size, len(self.processed_real_df))
+            
+            self.real_embeddings, self.synthetic_training_embeddings = self.autoencoder_trainer.train(
+                real_data=self.processed_real_df,
+                synthetic_data=self.processed_synthetic_training_df if use_synthetic_for_autoencoder else None,
+                epochs=autoencoder_epochs,
+                batch_size=adjusted_batch_size,
+                learning_rate=autoencoder_lr,
+                weight_decay=autoencoder_weight_decay,
+                use_synthetic_for_training=use_synthetic_for_autoencoder
+            )
+            
+            # If not using synthetic data for training, get synthetic embeddings separately
+            if not use_synthetic_for_autoencoder:
+                self.synthetic_training_embeddings = self.autoencoder_trainer.get_embeddings(self.processed_synthetic_training_df)
+            
+            if self.verbose:
+                print(f"Generated embeddings - Real: {self.real_embeddings.shape}, Synthetic training: {self.synthetic_training_embeddings.shape}")
+        else:
+            if self.verbose:
+                print("\n3. SKIPPING AUTOENCODER TRAINING (using processed data directly)")
+                print("-" * 40)
+            # Set embeddings to None when not using them
+            self.real_embeddings = None
+            self.synthetic_training_embeddings = None
+            self.autoencoder_trainer = None
         
         # Step 4: Train classifier for density ratio estimation
         if self.verbose:
             print("\n4. TRAINING CLASSIFIER FOR DENSITY RATIO ESTIMATION")
             print("-" * 40)
-            print(f"Using all provided synthetic training data: {self.synthetic_training_embeddings.shape}")
+            if use_embedding:
+                print(f"Using embeddings for classifier training: {self.real_embeddings.shape}")
+            else:
+                print(f"Using processed data for classifier training: {self.processed_real_df.shape}")
         
-        # Adjust MLP hidden layer sizes based on embedding dimension
-        adjusted_mlp_sizes = tuple(min(size, adjusted_embedding_dim * 4) 
-                                 for size in mlp_hidden_layer_sizes)
+        # Choose data based on use_embedding parameter
+        if use_embedding:
+            classifier_real_data = self.real_embeddings
+            classifier_synthetic_data = self.synthetic_training_embeddings
+            # Adjust MLP hidden layer sizes based on embedding dimension
+            adjusted_embedding_dim = self.real_embeddings.shape[1]
+            adjusted_mlp_sizes = tuple(min(size, adjusted_embedding_dim * 4) 
+                                     for size in mlp_hidden_layer_sizes)
+        else:
+            classifier_real_data = self.processed_real_df
+            classifier_synthetic_data = self.processed_synthetic_training_df
+            # Adjust MLP hidden layer sizes based on processed data dimension
+            adjusted_mlp_sizes = tuple(min(size, self.processed_real_df.shape[1] * 4) 
+                                     for size in mlp_hidden_layer_sizes)
         
         # Use all provided synthetic training data (no automatic subset selection)
         accuracy, roc_auc = self.classifier_trainer.train(
-            real_data=self.real_embeddings,
-            synthetic_data=self.synthetic_training_embeddings,
+            real_data=classifier_real_data,
+            synthetic_data=classifier_synthetic_data,
             test_size=classifier_test_size,
             mlp_hidden_layer_sizes=adjusted_mlp_sizes,
             show_calibration_plot=show_calibration_plot
@@ -260,13 +292,15 @@ class FidelityClassifier:
     
     def estimate_importance_weights(self, 
                                    synthetic_data: pd.DataFrame,
-                                   epsilon: float = 1e-9) -> Tuple[np.ndarray, np.ndarray]:
+                                   epsilon: float = 1e-9,
+                                   use_embedding: bool = True) -> Tuple[np.ndarray, np.ndarray]:
         """
         Estimate importance weights for synthetic data.
         
         Args:
             synthetic_data: Synthetic data to estimate weights for (must be provided)
             epsilon: Small constant for numerical stability
+            use_embedding: Whether to use embeddings for weight estimation (default: True)
             
         Returns:
             Tuple of (importance_weights, probabilities)
@@ -282,19 +316,31 @@ class FidelityClassifier:
             raise ValueError("synthetic_data must be provided to estimate importance weights. "
                            "Use a different synthetic dataset than the one used for training to avoid data leakage.")
         
+        # Check if use_embedding is consistent with training
+        if use_embedding and self.autoencoder_trainer is None:
+            raise ValueError("Cannot use embeddings: autoencoder was not trained. "
+                           "Set use_embedding=False or retrain with use_embedding=True in fit().")
+        
         if self.verbose:
             print(f"Estimating importance weights for {len(synthetic_data)} synthetic samples")
+            print(f"Using embeddings: {use_embedding}")
         
         # Transform using the fitted preprocessor to ensure consistent encoding
         processed_synthetic_df = self._transform_data(synthetic_data, is_real=False)
         
-        # Get embeddings for the new synthetic data
-        synthetic_embeddings = self.autoencoder_trainer.get_embeddings(processed_synthetic_df)
+        # Choose data based on use_embedding parameter
+        if use_embedding:
+            # Get embeddings for the new synthetic data
+            synthetic_data_for_weights = self.autoencoder_trainer.get_embeddings(processed_synthetic_df)
+            if self.verbose:
+                print(f"Generated embeddings for importance weight estimation: {synthetic_data_for_weights.shape}")
+        else:
+            # Use processed data directly
+            synthetic_data_for_weights = processed_synthetic_df
+            if self.verbose:
+                print(f"Using processed data for importance weight estimation: {synthetic_data_for_weights.shape}")
         
-        if self.verbose:
-            print(f"Generated embeddings for importance weight estimation: {synthetic_embeddings.shape}")
-        
-        return self.classifier_trainer.estimate_importance_weights(synthetic_embeddings, epsilon)
+        return self.classifier_trainer.estimate_importance_weights(synthetic_data_for_weights, epsilon)
     
     def visualize_importance_weights(self, 
                                     importance_weights: np.ndarray,
