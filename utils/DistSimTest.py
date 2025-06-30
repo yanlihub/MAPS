@@ -183,6 +183,9 @@ def compute_js_distance_joint_categorical(df_real: pd.DataFrame, df_syn: pd.Data
     try:
         # 1. Identify all categorical columns
         # (Assuming you have a way to identify them, otherwise use select_dtypes)
+        df_real_copy = df_real.copy()
+        df_syn_copy = df_syn.copy()
+
         categorical_cols = df_real.select_dtypes(include=['object', 'category']).columns.tolist()
         
         # Also check for numeric columns that might be categorical based on unique values
@@ -193,13 +196,15 @@ def compute_js_distance_joint_categorical(df_real: pd.DataFrame, df_syn: pd.Data
         if len(categorical_cols) < 1:
             print("Warning: No categorical columns found for joint distribution. Returning NaN.")
             return np.nan
-
-        print(f"Computing joint JS distance for categorical columns: {categorical_cols}")
+        
+        for col in categorical_cols:
+            df_real_copy[col] = df_real_copy[col].astype(str)
+            df_syn_copy[col] = df_syn_copy[col].astype(str)
 
         # 2. Create the interaction variable for both dataframes
         # We use apply with tuple to create a hashable key for each row
-        real_joint_dist = df_real[categorical_cols].apply(tuple, axis=1).value_counts()
-        syn_joint_dist = df_syn[categorical_cols].apply(tuple, axis=1).value_counts()
+        real_joint_dist = df_real_copy[categorical_cols].apply(tuple, axis=1).value_counts()
+        syn_joint_dist = df_syn_copy[categorical_cols].apply(tuple, axis=1).value_counts()
 
         # 3. Align the frequency tables
         # Get the union of all unique joint categories
