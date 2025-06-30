@@ -364,20 +364,25 @@ def plot_feature_importance_comparison(results, top_n=10, figsize=(15, 8)):
     axes[0].legend()
     axes[0].grid(axis='x', alpha=0.3)
     
-    # Plot 2: Correlation between feature importances
-    axes[1].scatter(importance_df['Raw Synthetic → Real'], importance_df['Refined Synthetic → Real'], 
-                   c='red', alpha=0.6, s=30, label='Raw vs Refined')
-    axes[1].scatter(importance_df['Real Train → Real Test'], importance_df['Refined Synthetic → Real'], 
-                   c='blue', alpha=0.6, s=30, label='Real vs Refined')
+    # Plot 2: Correlation between feature importances (only Real vs Raw and Real vs Refined)
+    # Calculate correlation coefficients first
+    corr_real_raw = np.corrcoef(importance_df['Real Train → Real Test'], importance_df['Raw Synthetic → Real'])[0,1]
+    corr_real_refined = np.corrcoef(importance_df['Real Train → Real Test'], importance_df['Refined Synthetic → Real'])[0,1]
+    
+    # Plot Real vs Raw (first)
     axes[1].scatter(importance_df['Real Train → Real Test'], importance_df['Raw Synthetic → Real'], 
-                   c='green', alpha=0.6, s=30, label='Real vs Raw')
+                   c='green', alpha=0.6, s=30, label=f'Real vs Raw (r={corr_real_raw:.3f})')
+    
+    # Plot Real vs Refined (second)
+    axes[1].scatter(importance_df['Real Train → Real Test'], importance_df['Refined Synthetic → Real'], 
+                   c='blue', alpha=0.6, s=30, label=f'Real vs Refined (r={corr_real_refined:.3f})')
     
     # Add diagonal line
     max_importance = importance_df[scenario_names].max().max()
     axes[1].plot([0, max_importance], [0, max_importance], 'k--', alpha=0.5)
     
-    axes[1].set_xlabel('Feature Importance (First Dataset)')
-    axes[1].set_ylabel('Feature Importance (Second Dataset)')
+    axes[1].set_xlabel('Real Train → Real Test Feature Importance')
+    axes[1].set_ylabel('Synthetic → Real Feature Importance')
     axes[1].set_title('Feature Importance Correlations')
     axes[1].legend()
     axes[1].grid(alpha=0.3)
@@ -389,13 +394,8 @@ def plot_feature_importance_comparison(results, top_n=10, figsize=(15, 8)):
     print("\nFeature Importance Correlation Analysis:")
     print("=" * 50)
     
-    corr_raw_refined = np.corrcoef(importance_df['Raw Synthetic → Real'], importance_df['Refined Synthetic → Real'])[0,1]
-    corr_real_refined = np.corrcoef(importance_df['Real Train → Real Test'], importance_df['Refined Synthetic → Real'])[0,1]
-    corr_real_raw = np.corrcoef(importance_df['Real Train → Real Test'], importance_df['Raw Synthetic → Real'])[0,1]
-    
-    print(f"Raw Synthetic vs Refined Synthetic: {corr_raw_refined:.4f}")
-    print(f"Real vs Refined Synthetic: {corr_real_refined:.4f}")
     print(f"Real vs Raw Synthetic: {corr_real_raw:.4f}")
+    print(f"Real vs Refined Synthetic: {corr_real_refined:.4f}")
     
     # Print top features for each scenario
     print(f"\nTop {min(5, top_n)} Features by Importance:")
