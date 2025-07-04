@@ -2,6 +2,7 @@
 Utility Evaluation for C-MAPS Framework
 Train on Synthetic, Test on Real approach with Random Forest
 Fixed to properly handle cross-validation: Train on Synthetic, Validate on Real
+FIXED: Synthetic datasets are now properly split to match real training size
 """
 import numpy as np
 import pandas as pd
@@ -429,6 +430,7 @@ def run_utility_evaluation(real_data, raw_synthetic_data, refined_synthetic_data
     print("ENHANCED UTILITY EVALUATION: TRAIN ON SYNTHETIC, TEST ON REAL")
     print("Cross-Validation: All Metrics (Accuracy, F1-Macro, ROC-AUC)")
     print("Feature Importance Analysis Included")
+    print("FIXED: Synthetic datasets properly split to match real training size")
     print("=" * 80)
     
     # First, check what classes are available in each dataset
@@ -470,6 +472,25 @@ def run_utility_evaluation(real_data, raw_synthetic_data, refined_synthetic_data
     print(f"Real CV validation set: {len(real_cv_val)} samples") 
     print(f"Real test set: {len(real_test)} samples")
     
+    # FIXED: Sample synthetic datasets to match real training size for fair comparison
+    real_train_size = len(real_train)
+    print(f"\nSampling synthetic datasets to match real training size: {real_train_size} samples")
+    
+    if len(raw_synthetic_data) < real_train_size:
+        print(f"Warning: Raw synthetic data ({len(raw_synthetic_data)}) smaller than real train size, using all")
+        raw_synthetic_train = raw_synthetic_data.copy()
+    else:
+        raw_synthetic_train = raw_synthetic_data.sample(n=real_train_size, random_state=random_state)
+    
+    if len(refined_synthetic_data) < real_train_size:
+        print(f"Warning: Refined synthetic data ({len(refined_synthetic_data)}) smaller than real train size, using all")
+        refined_synthetic_train = refined_synthetic_data.copy()
+    else:
+        refined_synthetic_train = refined_synthetic_data.sample(n=real_train_size, random_state=random_state)
+    
+    print(f"Raw synthetic train set: {len(raw_synthetic_train)} samples")
+    print(f"Refined synthetic train set: {len(refined_synthetic_train)} samples")
+    
     # Prepare all datasets with consistent encoding
     print("\nPreparing real test data...")
     X_real_test, y_real_test_temp, _, feature_encoders = prepare_data_for_classification(
@@ -489,24 +510,24 @@ def run_utility_evaluation(real_data, raw_synthetic_data, refined_synthetic_data
     )
     y_real_cv_val = target_encoder.transform(real_cv_val[target_column].astype(str))
     
-    print("\nPreparing raw synthetic data...")
+    print("\nPreparing raw synthetic training data...")
     X_raw_syn, y_raw_syn_temp, _, _ = prepare_data_for_classification(
-        raw_synthetic_data, target_column, feature_encoders
+        raw_synthetic_train, target_column, feature_encoders
     )
-    y_raw_syn = target_encoder.transform(raw_synthetic_data[target_column].astype(str))
+    y_raw_syn = target_encoder.transform(raw_synthetic_train[target_column].astype(str))
     
-    print("\nPreparing refined synthetic data...")
+    print("\nPreparing refined synthetic training data...")
     X_refined_syn, y_refined_syn_temp, _, _ = prepare_data_for_classification(
-        refined_synthetic_data, target_column, feature_encoders
+        refined_synthetic_train, target_column, feature_encoders
     )
-    y_refined_syn = target_encoder.transform(refined_synthetic_data[target_column].astype(str))
+    y_refined_syn = target_encoder.transform(refined_synthetic_train[target_column].astype(str))
     
     print(f"\nData preparation complete:")
     print(f"Real test data shape: {X_real_test.shape}")
     print(f"Real train data shape: {X_real_train.shape}")
     print(f"Real CV validation data shape: {X_real_cv_val.shape}")
-    print(f"Raw synthetic data shape: {X_raw_syn.shape}")
-    print(f"Refined synthetic data shape: {X_refined_syn.shape}")
+    print(f"Raw synthetic training data shape: {X_raw_syn.shape}")
+    print(f"Refined synthetic training data shape: {X_refined_syn.shape}")
     print(f"Number of encoded categorical features: {len(feature_encoders)}")
     
     # Check class distributions
@@ -514,8 +535,8 @@ def run_utility_evaluation(real_data, raw_synthetic_data, refined_synthetic_data
     print(f"Real test classes: {np.bincount(y_real_test)}")
     print(f"Real train classes: {np.bincount(y_real_train)}")
     print(f"Real CV val classes: {np.bincount(y_real_cv_val)}")
-    print(f"Raw synthetic classes: {np.bincount(y_raw_syn)}")
-    print(f"Refined synthetic classes: {np.bincount(y_refined_syn)}")
+    print(f"Raw synthetic training classes: {np.bincount(y_raw_syn)}")
+    print(f"Refined synthetic training classes: {np.bincount(y_refined_syn)}")
     
     results = {}
     
@@ -907,6 +928,7 @@ def print_summary_table(results):
     
     print("\nNote: CV for synthetic scenarios uses 'Train on Synthetic, Validate on Real'")
     print("      CV for real scenario uses standard 'Train on Real, Validate on Real'")
+    print("      All training sets now have equal size for fair comparison")
 
 ########################### below is the clustering evaluation function ###########################
 
@@ -946,6 +968,7 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
     """
     print("=" * 80)
     print("K-MEANS CLUSTERING EVALUATION (CONFIGURABLE LABELS & CV)")
+    print("FIXED: Synthetic datasets properly split to match real training size")
     print("=" * 80)
     
     # Prepare data
@@ -1004,14 +1027,33 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
     
     print(f"Real data split: {len(real_train)} train, {len(real_test)} test")
     
+    # FIXED: Sample synthetic datasets to match real training size for fair comparison
+    real_train_size = len(real_train)
+    print(f"Sampling synthetic datasets to match real training size: {real_train_size} samples")
+    
+    if len(raw_syn_features) < real_train_size:
+        print(f"Warning: Raw synthetic data ({len(raw_syn_features)}) smaller than real train size, using all")
+        raw_syn_train = raw_syn_features.copy()
+    else:
+        raw_syn_train = raw_syn_features.sample(n=real_train_size, random_state=random_state)
+    
+    if len(refined_syn_features) < real_train_size:
+        print(f"Warning: Refined synthetic data ({len(refined_syn_features)}) smaller than real train size, using all")
+        refined_syn_train = refined_syn_features.copy()
+    else:
+        refined_syn_train = refined_syn_features.sample(n=real_train_size, random_state=random_state)
+    
+    print(f"Raw synthetic training set: {len(raw_syn_train)} samples")
+    print(f"Refined synthetic training set: {len(refined_syn_train)} samples")
+    
     # Standardize features
     scaler = StandardScaler()
     real_train_scaled = scaler.fit_transform(real_train)
     real_test_scaled = scaler.transform(real_test)
     
     # Scale synthetic data using same scaler
-    raw_syn_scaled = scaler.transform(raw_syn_features)
-    refined_syn_scaled = scaler.transform(refined_syn_features)
+    raw_syn_scaled = scaler.transform(raw_syn_train)
+    refined_syn_scaled = scaler.transform(refined_syn_train)
     
     results = {
         'bic_analysis': {},
@@ -1128,14 +1170,27 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
         if use_true_labels:
             y_test_fold = real_labels.iloc[test_idx]
         
+        # FIXED: Sample synthetic data to match this fold's training size
+        fold_train_size = len(X_train_fold)
+        
+        if len(raw_syn_features) < fold_train_size:
+            raw_syn_fold = raw_syn_features.copy()
+        else:
+            raw_syn_fold = raw_syn_features.sample(n=fold_train_size, random_state=random_state + fold)
+        
+        if len(refined_syn_features) < fold_train_size:
+            refined_syn_fold = refined_syn_features.copy()
+        else:
+            refined_syn_fold = refined_syn_features.sample(n=fold_train_size, random_state=random_state + fold)
+        
         # Scale data for this fold
         scaler_fold = StandardScaler()
         X_train_scaled = scaler_fold.fit_transform(X_train_fold)
         X_test_scaled = scaler_fold.transform(X_test_fold)
         
         # Scale synthetic data with this fold's scaler
-        raw_syn_scaled_fold = scaler_fold.transform(raw_syn_features)
-        refined_syn_scaled_fold = scaler_fold.transform(refined_syn_features)
+        raw_syn_scaled_fold = scaler_fold.transform(raw_syn_fold)
+        refined_syn_scaled_fold = scaler_fold.transform(refined_syn_fold)
         
         # Fit clustering models
         kmeans_real_fold = KMeans(n_clusters=selected_k, random_state=random_state, n_init=10)
@@ -1252,6 +1307,8 @@ def run_clustering_evaluation(real_data, raw_synthetic_data, refined_synthetic_d
         print(f"\nSTATISTICAL SIGNIFICANCE (paired t-test):")
         print(f"ARI improvement p-value: {ari_ttest.pvalue:.4f}")
         print(f"AMI improvement p-value: {ami_ttest.pvalue:.4f}")
+    
+    print(f"\nAll training sets had equal size ({real_train_size} samples) for fair comparison")
     
     # Store configuration info in results
     results['config'] = {
