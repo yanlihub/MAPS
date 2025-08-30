@@ -925,10 +925,6 @@ def print_summary_table(results):
     print(f"\nGap to baseline (Raw Synthetic): {baseline_gap_raw_acc:.2f}%")
     print(f"Gap to baseline (Refined Synthetic): {baseline_gap_refined_acc:.2f}%")
     print(f"Refinement reduces gap by: {baseline_gap_raw_acc - baseline_gap_refined_acc:.2f} percentage points")
-    
-    print("\nNote: CV for synthetic scenarios uses 'Train on Synthetic, Validate on Real'")
-    print("      CV for real scenario uses standard 'Train on Real, Validate on Real'")
-    print("      All training sets now have equal size for fair comparison")
 
 ########################### below is the clustering evaluation function ###########################
 
