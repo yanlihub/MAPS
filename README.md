@@ -17,7 +17,7 @@ The framework operates in two main stages:
 ## Quick Start
 
 ```
-The tutorial.ipynb provide an concrete example of how MAPS works.
+The tutorial.ipynb provide a concrete example of how to use MAPS.
 ```
 
 ## 📁 Repository Structure
