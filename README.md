@@ -20,7 +20,7 @@ The framework operates in two main stages:
 The tutorial.ipynb provide a concrete example of how to use MAPS.
 ```
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 maps/
@@ -40,6 +40,6 @@ maps/
 └── tutorial.ipynb         # Complete tutorial
 ```
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License.

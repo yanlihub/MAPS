@@ -1,6 +1,5 @@
 """
 Privacy and Identifiability Analysis for C-MAPS framework.
-Updated to align with source code logic.
 
 This module identifies synthetic samples that violate privacy by being 
 too close to real samples (closer than the real sample's nearest real neighbor).
@@ -11,8 +10,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics import pairwise_distances
 from scipy.stats import entropy
+from scipy.spatial.distance import cdist
 from typing import Tuple, Optional
 import warnings
 
@@ -107,7 +106,7 @@ class IdentifiabilityAnalyzer:
             print("\n4. COMPUTING IDENTIFIABILITY FLAGS FOR SYNTHETIC SAMPLES")
             print("-" * 40)
         
-        identifiability_flags = self._compute_identifiability_flags(
+        identifiability_flags, violation_matrix,distances_real_to_syn = self._compute_identifiability_flags(
             self.processed_synthetic_df,
             self.processed_real_df,
             self.real_distinctness_thresholds,
@@ -132,7 +131,7 @@ class IdentifiabilityAnalyzer:
         
         # Compute overall identifiability score for comparison (after setting is_fitted)
         if self.verbose:
-            overall_score = self.compute_overall_identifiability_score()
+            overall_score,_ = self.compute_overall_identifiability_score()
             print(f"  Overall real identifiability score: {overall_score:.4f}")
             print(f"  (Overall score = ratio of real samples identifiable through synthetic data)")
         
@@ -236,7 +235,6 @@ class IdentifiabilityAnalyzer:
     def _compute_feature_weights(self, dataset: pd.DataFrame) -> np.ndarray:
         """
         Compute feature weights based on entropy for each feature.
-        Follows the exact logic from source code.
         
         Args:
             dataset: Input dataset
@@ -245,11 +243,9 @@ class IdentifiabilityAnalyzer:
             Array of feature weights
         """
         def compute_entropy(labels: np.ndarray) -> np.ndarray:
-            """Compute entropy of labels - exact function from source code."""
             value, counts = np.unique(np.round(labels), return_counts=True)
             return entropy(counts)
         
-        # Convert to numpy array like source code
         X_gt_ = np.asarray(dataset)
         no, x_dim = X_gt_.shape
         
@@ -260,7 +256,6 @@ class IdentifiabilityAnalyzer:
         for i in range(x_dim):
             W[i] = compute_entropy(X_gt_[:, i])
         
-        # Following source code logic - set weights to ones
         W = np.ones_like(W)
         
         return W
@@ -270,7 +265,6 @@ class IdentifiabilityAnalyzer:
                                               feature_weights: np.ndarray) -> np.ndarray:
         """
         Calculate distinctness thresholds r_i for each real sample.
-        Follows the exact logic from source code.
         
         Args:
             processed_real_df: Processed real data
@@ -282,18 +276,15 @@ class IdentifiabilityAnalyzer:
         if processed_real_df.empty:
             return np.array([])
         
-        # Convert to numpy array like source code
         X_gt_ = processed_real_df.values
         no, x_dim = X_gt_.shape
         
-        # Normalization following source code logic
         X_hat = X_gt_.copy()
         eps = 1e-16
         
         for i in range(x_dim):
             X_hat[:, i] = X_gt_[:, i] * 1.0 / (feature_weights[i] + eps)
         
-        # r_i computation - exact from source code
         nbrs = NearestNeighbors(n_neighbors=2).fit(X_hat)
         distance, _ = nbrs.kneighbors(X_hat)
         
@@ -325,12 +316,10 @@ class IdentifiabilityAnalyzer:
         if KN == 0 or processed_real_df.empty:
             return np.array([], dtype=int)
         
-        # Convert to numpy arrays like source code
         X_gt_ = processed_real_df.values
         X_syn_ = processed_synthetic_df.values
         no, x_dim = X_gt_.shape
         
-        # Normalization following source code logic
         X_hat = X_gt_.copy()
         X_syn_hat = X_syn_.copy()
         eps = 1e-16
@@ -342,19 +331,17 @@ class IdentifiabilityAnalyzer:
         if self.verbose:
             print(f"  Computing distances between {no} real and {KN} synthetic samples...")
         
-        # OPTIMIZATION: Compute all pairwise distances at once using vectorized operations
-        # This is much faster than the loop-based approach
-        distances_real_to_syn = pairwise_distances(X_hat, X_syn_hat, metric='euclidean')
+        distances_real_to_syn = cdist(X_hat, X_syn_hat, metric='euclidean')
         # Shape: (no, KN) - distances_real_to_syn[i, j] = distance from real_i to syn_j
         
         if self.verbose:
             print(f"  Distance computation complete. Finding privacy violations...")
         
-        # OPTIMIZATION: Vectorized comparison using broadcasting
         # real_thresholds shape: (no,) -> reshape to (no, 1) for broadcasting
         # distances_real_to_syn shape: (no, KN)
         # Result shape: (no, KN) - True where syn sample j violates privacy of real sample i
         violation_matrix = distances_real_to_syn < real_thresholds.reshape(-1, 1)
+        # print the shape of violation_matrix for debugging
         
         # OPTIMIZATION: Find synthetic samples that violate ANY real sample's privacy
         # Use np.any along axis 0 (real samples axis) to get per-synthetic-sample flags
@@ -371,8 +358,8 @@ class IdentifiabilityAnalyzer:
             real_samples_violated = np.sum(np.any(violation_matrix, axis=1))
             print(f"  Real samples with privacy violations: {real_samples_violated}/{no}")
         
-        return synthetic_identifiable_flags
-    
+        return synthetic_identifiable_flags, violation_matrix, distances_real_to_syn
+
     def get_processed_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Get the processed data."""
         if not self.is_fitted:
@@ -392,21 +379,17 @@ class IdentifiabilityAnalyzer:
         return self.real_distinctness_thresholds
     
     def compute_overall_identifiability_score(self) -> float:
-        """
-        Compute the overall identifiability score as in the source code.
-        
+        """        
         Returns:
             Overall identifiability score (ratio of identifiable real samples)
         """
         if not self.is_fitted:
             raise ValueError("IdentifiabilityAnalyzer must be fitted first")
         
-        # Convert to numpy arrays like source code
         X_gt_ = self.processed_real_df.values
         X_syn_ = self.processed_synthetic_df.values
         no, x_dim = X_gt_.shape
         
-        # Normalization following source code logic
         X_hat = X_gt_.copy()
         X_syn_hat = X_syn_.copy()
         eps = 1e-16
@@ -416,16 +399,13 @@ class IdentifiabilityAnalyzer:
             X_hat[:, i] = X_gt_[:, i] * 1.0 / (W[i] + eps)
             X_syn_hat[:, i] = X_syn_[:, i] * 1.0 / (W[i] + eps)
         
-        # r_i computation - exact from source code
         nbrs = NearestNeighbors(n_neighbors=2).fit(X_hat)
         distance, _ = nbrs.kneighbors(X_hat)
         
-        # hat{r_i} computation - exact from source code
         nbrs_hat = NearestNeighbors(n_neighbors=1).fit(X_syn_hat)
         distance_hat, _ = nbrs_hat.kneighbors(X_hat)
         
-        # R_Diff computation - exact from source code
         R_Diff = distance_hat[:, 0] - distance[:, 1]
         identifiability_value = np.sum(R_Diff < 0) / float(no)
         
-        return identifiability_value
+        return identifiability_value, distance[:, 1]
