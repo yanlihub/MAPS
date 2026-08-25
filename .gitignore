@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# IDE files
+.vscode/
+.idea/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local configuration
+.env
+*.log
+
+# Data, results and generated artefacts, at the repository root only -- an unanchored
+# "data/" would also swallow maps/data/. The synthetic pools alone run to several GB and
+# every one of these is reproducible from the scripts.
+/data/
+/logs/
+/results/
+/figures/
