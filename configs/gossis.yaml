@@ -1,0 +1,43 @@
+dataset:
+  name: gossis
+  real_csv: raw/gossis/gossis_cardio_full.csv
+  target: dx_class
+  secondary_target: hospital_death   # mortality prediction target
+  # Columns that leak the target and must not be used as features. dx_sub determines
+  # dx_class outright -- each of its values maps to a single class -- and icu_death is
+  # all but the same event as hospital_death.
+  exclude_for:
+    classification: ['dx_sub']
+    mortality: ['icu_death']
+    clustering: ['dx_class', 'dx_sub']
+  train_frac: 0.6
+  split_seed: 0
+  stratify: true
+
+maps:
+  pool_multiplier: 30
+  alpha: 0.8                # tempering exponent, the same for every generator on this dataset
+  replacement: true
+  method: weighted
+  weight_processing: flatten
+  classifier:
+    mlp_hidden_layer_sizes: [480, 240]
+    classifier_test_size: 0.2
+    calibration_method: sigmoid
+    use_embedding: false
+
+privacy:
+  # DOMIAS settings. GOSSIS is projected to 20 principal components first: the attack
+  # fits a Gaussian kernel density estimator, which cannot be fitted when the covariance
+  # matrix is singular, and it is singular for the raw encoding because one variable
+  # (the body system that defines the cohort) is constant.
+  domias_reference_size: 4000
+  domias_pca_components: 20
+
+evaluation:
+  n_runs: 5
+  clustering_k: 5
+  test_size: 0.2
+  cp_alpha: 0.05
+
+models: [tvae, ctgan, ddpm, dgd]

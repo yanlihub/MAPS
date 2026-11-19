@@ -1,0 +1,11 @@
+# Filesystem layout.
+#
+# >>> REPLACE data_root WITH YOUR OWN DIRECTORY <<<
+# Synthetic pools are large (tens of GB for a 30x pool) and fully regenerable, so point this
+# at scratch or project storage rather than a home directory. A relative path is resolved
+# against the repository root. The MAPS_DATA_ROOT environment variable overrides this file.
+data_root:    ./data
+raw_dir:      ${data_root}/raw
+splits_dir:   ${data_root}/splits
+pools_dir:    ${data_root}/pools
+results_dir:  ${data_root}/results

@@ -1,0 +1,38 @@
+dataset:
+  name: tcga
+  real_csv: raw/tcga/TCGA_metadata_21_var_real.csv
+  target: cancer_types            # classification target
+  secondary_target: tcga.gdc_cases.diagnoses.vital_status  # mortality prediction target
+  # Columns excluded from the features, per task. The two supervised tasks use every
+  # column other than their target; clustering leaves out the class label.
+  exclude_for:
+    classification: []
+    mortality: []
+    clustering: ['cancer_types']
+  train_frac: 0.6
+  split_seed: 0
+  stratify: true
+
+maps:
+  pool_multiplier: 30       # M = pool_multiplier * |D_train|
+  alpha: 1.4                # tempering exponent, the same for every generator on this dataset
+  replacement: true         # SIR draws with replacement (Appendix B.5)
+  method: weighted
+  weight_processing: flatten
+  classifier:
+    mlp_hidden_layer_sizes: [240, 120]
+    classifier_test_size: 0.2
+    calibration_method: sigmoid
+    use_embedding: false
+
+privacy:
+  # DOMIAS settings. The encoded table is used directly, without a PCA projection.
+  domias_reference_size: 1000
+
+evaluation:
+  n_runs: 5
+  clustering_k: 5
+  test_size: 0.2
+  cp_alpha: 0.05
+
+models: [tvae, ctgan, ddpm, dgd]
